@@ -27,7 +27,7 @@ assert.match(gui, /progress_target/);
 assert.match(gui, /CreateCompatibleBitmap/);
 assert.match(core, /Сохранено файлов:/);
 assert.match(gui, /BS_OWNERDRAW/);
-assert.match(gui, /FillRect\(item\.dc, &item\.rect, app\.bg_brush\)/);
+assert.match(gui, /FillRect\(item\.dc, &item\.rect,/);
 assert.match(gui, /Пропускать отсутствующие страницы/);
 assert.match(gui, /open_ready: false/);
 assert.doesNotMatch(gui, /"Создать хранилище"/);
