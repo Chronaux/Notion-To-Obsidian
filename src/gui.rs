@@ -512,25 +512,27 @@ impl App {
         let v = |n: i32| (n as f32 * s) as i32;
         let m = v(28);
         let gap = v(12);
-        let btn = v(170);
+        let btn = v(146);
         let editw = (w - 2 * m - gap - btn).max(v(120));
+        let log_bottom = h - if self.open_ready { v(85) } else { v(30) };
         let rows = [
-            (m + v(17), v(24), w - 2 * m - v(17), v(44)), // Brand title
-            (m, v(77), w - 2 * m, v(24)),          // Subtitle
-            (m, v(127), w - 2 * m, v(24)),         // ZIP label
-            (m + v(12), v(164), editw - v(24), v(28)),
-            (m + editw + gap, v(155), btn, v(46)),
-            (m, v(221), w - 2 * m, v(24)),         // Output label
-            (m + v(12), v(258), editw - v(24), v(28)),
-            (m + editw + gap, v(249), btn, v(46)),
-            (m, v(312), w - 2 * m, v(24)),         // Hint
-            (m, v(401), v(178), v(44)),
-            (m + v(190), v(401), v(178), v(44)),
-            (m + v(380), v(401), v(132), v(44)),
-            (m, v(467), w - 2 * m, v(24)),         // Status
-            (m + v(10), v(506), w - 2 * m - v(20), (h - v(592)).max(v(68))),
+            (m + v(17), v(20), w - 2 * m - v(17), v(44)), // Title
+            (m, v(72), w - 2 * m, v(24)),          // Subtitle
+            (m, v(120), w - 2 * m, v(24)),         // ZIP label
+            (m + v(12), v(162), editw - v(24), v(28)),
+            (m + editw + gap, v(153), btn, v(46)),
+            (m, v(209), w - 2 * m, v(24)),         // Output label
+            (m + v(12), v(251), editw - v(24), v(28)),
+            (m + editw + gap, v(242), btn, v(46)),
+            (m, v(296), w - 2 * m, v(22)),         // Hint
+            (m, v(359), v(184), v(44)),
+            (m + v(196), v(359), v(224), v(44)),
+            (m + v(432), v(359), v(132), v(44)),
+            (m, v(422), w - 2 * m, v(24)),         // Status
+            (m + v(10), v(467), w - 2 * m - v(20),
+                (log_bottom - v(467)).max(v(44))),
             (m, h - v(62), w - 2 * m, v(42)),      // Open result
-            (m, v(351), w - 2 * m, v(36)),        // Manual skip
+            (m, v(318), w - 2 * m, v(35)),        // Optional skip
         ];
         for (i, (x, y, width, height)) in rows.iter().enumerate() {
             MoveWindow(self.controls[i], *x, *y, *width, *height, 1);
