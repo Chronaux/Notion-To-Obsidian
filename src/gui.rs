@@ -571,13 +571,16 @@ impl App {
             );
             return;
         }
+        self.open_ready = false;
+        ShowWindow(self.controls[14], 0);
+        self.layout();
         set(self.controls[13], "");
         set(
             self.controls[12],
             if inspect {
-                "Проверка архива…"
+                "Проверяем ZIP…"
             } else {
-                "Преобразование…"
+                "Создаём хранилище…"
             },
         );
         EnableWindow(self.controls[14], 0);
@@ -615,8 +618,23 @@ impl App {
         for event in events {
             match event {
                 Event::Message(s) => {
-                    set(self.controls[12], &s);
-                    self.log(&s)
+                    // Keep internal paths and long diagnostics out of the UI.
+                    let message = if s.starts_with("Чтение ZIP") {
+                        "Читаем архив…"
+                    } else if s.starts_with("Сопоставление CSV") {
+                        "Находим записи и таблицы…"
+                    } else if s.starts_with("Преобразование страниц") {
+                        "Переносим страницы…"
+                    } else if s.starts_with("Проверка ссылок") {
+                        "Проверяем ссылки и файлы…"
+                    } else if s.starts_with("Готово.") {
+                        "Завершаем перенос…"
+                    } else {
+                        ""
+                    };
+                    if !message.is_empty() {
+                        set(self.controls[12], message);
+                    }
                 }
                 Event::Done(result, inspect) => {
                     self.set_busy(false);
@@ -631,45 +649,35 @@ impl App {
                                     "Готово — хранилище создано"
                                 },
                             );
+                            set(self.controls[13], "");
                             self.log(&format!(
-                                "\nСтраниц: {} · Баз: {} · Записей: {}",
+                                "Страниц: {}   ·   Баз: {}   ·   Записей: {}",
                                 r.stats.get("source_pages").unwrap_or(&0),
                                 r.stats.get("source_databases").unwrap_or(&0),
                                 r.stats.get("source_rows").unwrap_or(&0)
                             ));
-                            let matched = r
-                                .row_matching
-                                .iter()
-                                .filter_map(|x| x["matched"].as_u64())
-                                .sum::<u64>();
-                            self.log(&format!("Сопоставлено записей с Markdown: {matched}"));
-                            for d in &r.databases {
-                                self.log(&format!(
-                                    "  {}: {} записей, в текущем виде {}",
-                                    d["title"].as_str().unwrap_or(""),
-                                    d["rows"],
-                                    d["view_rows"]
-                                ));
-                            }
                             if !inspect {
                                 self.log(&format!(
-                                    "\nВложений: {} · Заглушек: {} · Пропущено страниц: {}",
+                                    "Вложений: {}   ·   Пропущено страниц: {}",
                                     r.stats.get("attachments").unwrap_or(&0),
-                                    r.stats.get("missing_pages").unwrap_or(&0),
                                     r.stats.get("skipped_pages").unwrap_or(&0)
                                 ));
-                                self.log("Откройте папку результата в Obsidian. Подробности — в .notion-to-obsidian/migration-report.json.");
+                                self.log("Готово. Теперь можно открыть хранилище в Obsidian.");
+                                self.open_ready = true;
+                                ShowWindow(self.controls[14], 1);
                                 EnableWindow(self.controls[14], 1);
+                                self.layout();
+                            } else {
+                                self.log("Архив подходит для преобразования.");
                             }
-                            self.log(&format!("Предупреждений: {}", r.warnings.len()));
-                            for w in r.warnings.iter().take(10) {
-                                self.log(&format!("  {}: {}", w.kind, w.detail));
+                            if !r.warnings.is_empty() {
+                                self.log(&format!("Предупреждений: {}. Подробности в отчёте.", r.warnings.len()));
                             }
                         }
                         Err(e) => {
                             set(
                                 self.controls[12],
-                                "Операция завершена с ошибкой или отменена",
+                                "Не удалось завершить перенос",
                             );
                             self.log(&e);
                         }
@@ -820,7 +828,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                 107 => {
                     app.stop.store(true, Ordering::Relaxed);
                     EnableWindow(app.controls[11], 0);
-                    set(app.controls[12], "Отмена…");
+                    set(app.controls[12], "Отменяем…");
                 }
                 110 if !app.busy => {
                     app.skip_missing = !app.skip_missing;
