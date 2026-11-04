@@ -1,0 +1,10 @@
+/target/
+/dist/
+*.zip
+*.exe
+*.pdb
+*.log
+.DS_Store
+Thumbs.db
+/node_modules/
+!/downloads/*.zip
