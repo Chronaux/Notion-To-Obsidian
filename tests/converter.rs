@@ -774,52 +774,57 @@ fn nested_database_subpages_follow_records_and_unrelated_pages_stay_in_instructi
 #[test]
 fn databases_with_same_title_in_distinct_sections_do_not_merge() {
     let t = root();
-    let article_two = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-    let database_two = "ffffffffffffffffffffffffffffffff";
-    let row_one = "cccccccccccccccccccccccccccccccc";
-    let row_two = "99999999999999999999999999999999";
+    let second_page = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let second_database = "ffffffffffffffffffffffffffffffff";
+    let first_row = "cccccccccccccccccccccccccccccccc";
+    let second_row = "99999999999999999999999999999999";
     let p = archive(
         t.path(),
         vec![
+            s(format!("Инструкция {A}.md"), "# Инструкция"),
             s(
-                format!("Инструкция {A}.md"),
-                format!(
-                    "# Инструкция\n\n## Учитель\n\n[Планы](Инструкция/Планы%20{B}.md)\n\n## Админ\n\n[Планы](Инструкция/Планы%20{article_two}.md)"
-                ),
-            ),
-            s(
-                format!("Инструкция/Планы {B}.md"),
+                format!("Инструкция/Учитель/Планы {B}.md"),
                 format!("# Планы\n\n[Таблица](Планы%20{D}.csv)"),
             ),
             s(
-                format!("Инструкция/Планы {article_two}.md"),
-                format!("# Планы\n\n[Таблица](Планы%20{database_two}.csv)"),
+                format!("Инструкция/Админ/Планы {second_page}.md"),
+                format!("# Планы\n\n[Таблица](Планы%20{second_database}.csv)"),
             ),
             s(
-                format!("Инструкция/Планы {D}_all.csv"),
+                format!("Инструкция/Учитель/Планы {D}_all.csv"),
                 "Имя,Ответ\nПервый,Да\n",
             ),
             s(
-                format!("Инструкция/Планы {database_two}_all.csv"),
+                format!("Инструкция/Админ/Планы {second_database}_all.csv"),
                 "Имя,Ответ\nВторой,Нет\n",
             ),
             s(
-                format!("Инструкция/Планы/Первый {row_one}.md"),
+                format!("Инструкция/Учитель/Планы/Первый {first_row}.md"),
                 "# Первый\n\nОтвет: Да",
             ),
             s(
-                format!("Инструкция/Планы eeee-eeee/Второй {row_two}.md"),
+                format!("Инструкция/Админ/Планы/Второй {second_row}.md"),
                 "# Второй\n\nОтвет: Нет",
             ),
         ],
     );
-    let report = convert(&p, &t.path().join("out")).unwrap();
+    let out = t.path().join("out");
+    let report = convert(&p, &out).unwrap();
     assert_eq!(report.audit["passed"], true);
-    assert_ne!(
-        report.databases[0]["readable_table"],
-        report.databases[1]["readable_table"]
+    assert_eq!(report.mapping[B], "Инструкция/Учитель/Планы.md");
+    assert_eq!(report.mapping[second_page], "Инструкция/Админ/Планы.md");
+    assert_eq!(
+        report.mapping[first_row],
+        "Базы данных/Инструкция/Учитель/Планы/Первый.md"
+    );
+    assert_eq!(
+        report.mapping[second_row],
+        "Базы данных/Инструкция/Админ/Планы/Второй.md"
     );
     for db in &report.databases {
-        assert!(db["readable_table"].as_str().unwrap().starts_with("Базы данных/"));
+        let table = db["readable_table"].as_str().unwrap();
+        assert!(table.starts_with("Базы данных/Инструкция/"));
+        assert!(out.join(table).exists());
     }
+    assert_ne!(report.databases[0]["readable_table"], report.databases[1]["readable_table"]);
 }
