@@ -768,6 +768,10 @@ fn nested_database_subpages_follow_records_and_unrelated_pages_stay_in_instructi
     assert!(article.contains(&format!("[[{folder}/Ряд|Ряд]]")));
     let row = fs::read_to_string(out.join(&report.mapping[row_id])).unwrap();
     assert!(row.contains(&report.mapping[child_id]));
+    let base_path = report.databases[0]["base"].as_str().unwrap();
+    let base = fs::read_to_string(out.join(base_path)).unwrap();
+    assert!(base.contains(&report.mapping[row_id]));
+    assert!(!base.contains(&report.mapping[B]));
     assert_eq!(report.audit["passed"], true);
 }
 
