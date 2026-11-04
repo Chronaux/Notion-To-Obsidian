@@ -419,31 +419,31 @@ impl App {
             ("STATIC", "Notion → Obsidian", 0u32, 0),
             (
                 "STATIC",
-                "Перенос экспорта Notion в готовое хранилище Obsidian · локально и безопасно",
+                "Ваши страницы, таблицы и файлы — в одном хранилище",
                 0,
                 0,
             ),
-            ("STATIC", "Архив Notion · Markdown & CSV", 0, 0),
+            ("STATIC", "Экспорт Notion (.zip)", 0, 0),
             ("EDIT", "", 0x80 | 0x10000, 101),
-            ("BUTTON", "Выбрать ZIP…", 0x10000, 102),
-            ("STATIC", "Новая папка результата", 0, 0),
+            ("BUTTON", "Обзор…", 0x10000, 102),
+            ("STATIC", "Папка для нового хранилища", 0, 0),
             ("EDIT", "", 0x80 | 0x10000, 103),
-            ("BUTTON", "Выбрать папку…", 0x10000, 104),
+            ("BUTTON", "Обзор…", 0x10000, 104),
             (
                 "STATIC",
-                "Папка результата сразу откроется в Obsidian как хранилище. Для таблиц включите Bases.",
+                "Исходные файлы останутся без изменений",
                 0,
                 0,
             ),
-            ("BUTTON", "Проверить архив", 0x10000, 105),
-            ("BUTTON", "Преобразовать", 0x10000 | 1, 106),
+            ("BUTTON", "Проверить ZIP", 0x10000, 105),
+            ("BUTTON", "Создать хранилище", 0x10000 | 1, 106),
             ("BUTTON", "Отменить", 0x10000, 107),
-            ("STATIC", "Выберите ZIP или перетащите его в окно.", 0, 0),
+            ("STATIC", "Выберите ZIP или перетащите его сюда", 0, 0),
             ("EDIT", "", 0x4 | 0x800 | 0x40 | 0x1000 | 0x200000, 108),
-            ("BUTTON", "Открыть результат", 0x10000, 109),
+            ("BUTTON", "Открыть хранилище", 0x10000, 109),
             (
                 "BUTTON",
-                "Не создавать заглушки отсутствующих страниц Notion (проверено вручную)",
+                "Пропускать отсутствующие страницы",
                 0x10000 | 0xB, // BS_OWNERDRAW; state is held by App
                 110,
             ),
@@ -485,6 +485,7 @@ impl App {
         set(self.controls[6], &fresh_path(default).to_string_lossy());
         EnableWindow(self.controls[11], 0);
         EnableWindow(self.controls[14], 0);
+        ShowWindow(self.controls[14], 0);
         // Slight insets provide breathing room without adding custom controls.
         for i in [3usize, 6] {
             SendMessageW(self.controls[i], 0x00D3, 3, (10 << 16) | 10); // EM_SETMARGINS
