@@ -261,7 +261,7 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
     FillRect(dc, &client, app.bg_brush);
     let scale = app.scale;
     let v = |n: i32| (n as f32 * scale) as i32;
-    let header = Rect { left: 0, top: 0, right: client.right, bottom: v(111) };
+    let header = Rect { left: 0, top: 0, right: client.right, bottom: v(105) };
     FillRect(dc, &header, app.header_brush);
     let accent = Rect { left: v(28), top: v(23), right: v(33), bottom: v(67) };
     let accent_brush = CreateSolidBrush(ACCENT);
@@ -270,9 +270,9 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
 
     let m = v(28);
     let gap = v(12);
-    let btn = v(170);
+    let btn = v(146);
     let editw = (client.right - 2 * m - gap - btn).max(v(120));
-    for y in [155, 249] {
+    for y in [153, 242] {
         rounded(
             dc,
             &Rect { left: m, top: v(y), right: m + editw, bottom: v(y + 46) },
@@ -283,15 +283,18 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
         dc,
         &Rect {
             left: m,
-            top: v(496),
+            top: v(456),
             right: client.right - m,
-            bottom: client.bottom - v(75),
+            bottom: client.bottom - if app.open_ready { v(75) } else { v(20) },
         },
         LOG_BG, BORDER, v(14),
     );
 }
 
 unsafe fn draw_button(item: &DrawItem, app: &App) {
+    // Owner-drawn controls are rectangular: clear the corners before
+    // painting a rounded surface, avoiding white Windows artifacts.
+    FillRect(item.dc, &item.rect, app.bg_brush);
     let disabled = item.item_state & 0x4 != 0;
     let down = item.item_state & 0x1 != 0;
     let focused = item.item_state & 0x10 != 0;
@@ -367,6 +370,7 @@ struct App {
     field_brush: H,
     log_brush: H,
     skip_missing: bool,
+    open_ready: bool,
     rx: Option<Receiver<Event>>,
     stop: Arc<AtomicBool>,
     busy: bool,
@@ -477,7 +481,7 @@ impl App {
             .map(PathBuf::from)
             .unwrap_or(PathBuf::from("."))
             .join("Documents")
-            .join("Notion_Obsidian_v0.5.1");
+            .join("Notion_Obsidian_v0.5.2");
         set(self.controls[6], &fresh_path(default).to_string_lossy());
         EnableWindow(self.controls[11], 0);
         EnableWindow(self.controls[14], 0);
@@ -709,7 +713,7 @@ impl App {
                 let end = buf.iter().position(|&x| x == 0).unwrap();
                 let path = fresh_path(
                     PathBuf::from(String::from_utf16_lossy(&buf[..end]))
-                        .join("Notion_Obsidian_v0.5.1"),
+                        .join("Notion_Obsidian_v0.5.2"),
                 );
                 set(self.controls[6], &path.to_string_lossy());
             }
@@ -795,7 +799,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         0x24 => {
             let points = l as *mut Point;
             (*points.add(3)).x = (760.0 * app.scale) as i32;
-            (*points.add(3)).y = (660.0 * app.scale) as i32;
+            (*points.add(3)).y = (670.0 * app.scale) as i32;
             0
         }
         5 => {
@@ -905,6 +909,7 @@ pub fn launch(archive: Option<PathBuf>) {
             field_brush: 0,
             log_brush: 0,
             skip_missing: false,
+            open_ready: false,
             rx: None,
             stop: Arc::new(AtomicBool::new(false)),
             busy: false,
@@ -913,13 +918,13 @@ pub fn launch(archive: Option<PathBuf>) {
         });
         let ptr = Box::into_raw(app);
         let width = (940.0 * scale) as i32;
-        let height = (770.0 * scale) as i32;
+        let height = (710.0 * scale) as i32;
         let x = ((GetSystemMetrics(0) - width) / 2).max(0);
         let y = ((GetSystemMetrics(1) - height) / 2).max(0);
         let hwnd = CreateWindowExW(
             0,
             name.as_ptr(),
-            wide("Notion → Obsidian · 0.5.1").as_ptr(),
+            wide("Notion → Obsidian · 0.5.2").as_ptr(),
             0x00cf0000,
             x,
             y,
