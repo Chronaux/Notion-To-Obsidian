@@ -681,3 +681,29 @@ fn standalone_page_with_database_is_kept_inside_database_folder() {
     assert!(out.join("План/Занятие.md").exists());
     assert_eq!(report.audit["passed"], true);
 }
+
+
+#[test]
+fn database_parent_stays_with_empty_database_without_row_folder() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Главная {A}.md"),
+                format!("# Главная\n\n## Учитель\n\n[План](Главная/План%20{B}.md)"),
+            ),
+            s(
+                format!("Главная/План {B}.md"),
+                format!("# План\n\n[План](План%20{D}.csv)"),
+            ),
+            s(format!("Главная/План {D}_all.csv"), "Название,Ответ\n"),
+        ],
+    );
+    let out = t.path().join("out");
+    let report = convert(&p, &out).unwrap();
+    assert_eq!(report.mapping[B], "Главная/Учитель/План/План.md");
+    assert!(!out.join("Главная/Учитель/План.md").exists());
+    assert!(out.join("Главная/Учитель/План/План — таблица.md").is_file());
+    assert_eq!(report.audit["passed"], true);
+}
