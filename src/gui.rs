@@ -18,12 +18,37 @@ struct Point {
     y: i32,
 }
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct Rect {
     left: i32,
     top: i32,
     right: i32,
     bottom: i32,
 }
+// DRAWITEMSTRUCT on Win64. Used by BS_OWNERDRAW for native dark buttons.
+#[repr(C)]
+struct DrawItem {
+    control_type: u32,
+    control_id: u32,
+    item_id: u32,
+    item_action: u32,
+    item_state: u32,
+    hwnd: H,
+    dc: H,
+    rect: Rect,
+    item_data: usize,
+}
+const fn rgb(r: u8, g: u8, b: u8) -> u32 {
+    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+}
+const BG: u32 = rgb(17, 19, 27);
+const HEADER: u32 = rgb(24, 27, 39);
+const FIELD: u32 = rgb(32, 36, 50);
+const LOG_BG: u32 = rgb(20, 23, 33);
+const BORDER: u32 = rgb(60, 66, 88);
+const TEXT: u32 = rgb(239, 241, 249);
+const MUTED: u32 = rgb(164, 171, 192);
+const ACCENT: u32 = rgb(123, 103, 244);
 #[repr(C)]
 struct Msg {
     hwnd: H,
@@ -119,6 +144,9 @@ extern "system" {
     fn EnableWindow(hwnd: H, enable: i32) -> i32;
     fn MoveWindow(hwnd: H, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
     fn GetClientRect(hwnd: H, rect: *mut Rect) -> i32;
+    fn InvalidateRect(hwnd: H, rect: *const Rect, erase: i32) -> i32;
+    fn FillRect(dc: H, rect: *const Rect, brush: H) -> i32;
+    fn DrawTextW(dc: H, text: *const u16, len: i32, rect: *mut Rect, format: u32) -> i32;
     fn MessageBoxW(hwnd: H, text: *const u16, title: *const u16, flags: u32) -> i32;
     fn SetTimer(hwnd: H, id: usize, ms: u32, callback: usize) -> usize;
     fn KillTimer(hwnd: H, id: usize) -> i32;
@@ -152,6 +180,21 @@ extern "system" {
         face: *const u16,
     ) -> H;
     fn DeleteObject(object: H) -> i32;
+    fn CreateSolidBrush(color: u32) -> H;
+    fn CreatePen(style: i32, width: i32, color: u32) -> H;
+    fn SelectObject(dc: H, object: H) -> H;
+    fn SetTextColor(dc: H, color: u32) -> u32;
+    fn SetBkColor(dc: H, color: u32) -> u32;
+    fn SetBkMode(dc: H, mode: i32) -> i32;
+    fn RoundRect(dc: H, left: i32, top: i32, right: i32, bottom: i32, width: i32, height: i32) -> i32;
+}
+#[link(name = "dwmapi")]
+extern "system" {
+    fn DwmSetWindowAttribute(hwnd: H, attribute: u32, value: *const i32, size: u32) -> i32;
+}
+#[link(name = "uxtheme")]
+extern "system" {
+    fn SetWindowTheme(hwnd: H, theme: *const u16, sub_id: *const u16) -> i32;
 }
 #[link(name = "comdlg32")]
 extern "system" {
@@ -199,6 +242,117 @@ unsafe fn dialog(h: H, s: &str) {
         0x30,
     );
 }
+// GDI-only dark UI. No WebView, external theme DLLs, or runtime dependencies.
+unsafe fn rounded(dc: H, rect: &Rect, fill: u32, outline: u32, radius: i32) {
+    let brush = CreateSolidBrush(fill);
+    let pen = CreatePen(0, 1, outline);
+    let old_brush = SelectObject(dc, brush);
+    let old_pen = SelectObject(dc, pen);
+    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
+    SelectObject(dc, old_pen);
+    SelectObject(dc, old_brush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
+unsafe fn background(hwnd: H, dc: H, app: &App) {
+    let mut client = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+    GetClientRect(hwnd, &mut client);
+    FillRect(dc, &client, app.bg_brush);
+    let scale = app.scale;
+    let v = |n: i32| (n as f32 * scale) as i32;
+    let header = Rect { left: 0, top: 0, right: client.right, bottom: v(111) };
+    FillRect(dc, &header, app.header_brush);
+    let accent = Rect { left: v(28), top: v(23), right: v(33), bottom: v(67) };
+    let accent_brush = CreateSolidBrush(ACCENT);
+    FillRect(dc, &accent, accent_brush);
+    DeleteObject(accent_brush);
+
+    let m = v(28);
+    let gap = v(12);
+    let btn = v(170);
+    let editw = (client.right - 2 * m - gap - btn).max(v(120));
+    for y in [155, 249] {
+        rounded(
+            dc,
+            &Rect { left: m, top: v(y), right: m + editw, bottom: v(y + 46) },
+            FIELD, BORDER, v(12),
+        );
+    }
+    rounded(
+        dc,
+        &Rect {
+            left: m,
+            top: v(496),
+            right: client.right - m,
+            bottom: client.bottom - v(75),
+        },
+        LOG_BG, BORDER, v(14),
+    );
+}
+
+unsafe fn draw_button(item: &DrawItem, app: &App) {
+    let disabled = item.item_state & 0x4 != 0;
+    let down = item.item_state & 0x1 != 0;
+    let focused = item.item_state & 0x10 != 0;
+    let check = item.control_id == 110;
+    let primary = item.control_id == 106;
+    let can_open = item.control_id == 109;
+    let (background, outline, foreground) = if disabled {
+        (rgb(33, 36, 47), rgb(47, 51, 66), rgb(102, 109, 130))
+    } else if primary {
+        (if down { rgb(96, 77, 205) } else { ACCENT }, ACCENT, TEXT)
+    } else if can_open {
+        (if down { rgb(54, 48, 94) } else { rgb(40, 37, 68) },
+         rgb(103, 87, 174), TEXT)
+    } else if check {
+        (rgb(27, 30, 43), if focused { ACCENT } else { BORDER }, TEXT)
+    } else {
+        (if down { rgb(48, 53, 72) } else { FIELD },
+         if focused { ACCENT } else { BORDER }, TEXT)
+    };
+    let radius = ((if check { 12.0 } else { 14.0 }) * app.scale) as i32;
+    rounded(item.dc, &item.rect, background, outline, radius);
+    SetBkMode(item.dc, 1); // TRANSPARENT
+    SetTextColor(item.dc, foreground);
+    let old_font = SelectObject(item.dc, app.font);
+    let label = get(item.hwnd);
+    let wide_label = wide(&label);
+    let mut text_rect = item.rect;
+    let format = 0x20 | 0x4 | 0x8000; // SINGLELINE, VCENTER, END_ELLIPSIS
+    if check {
+        let offset = (14.0 * app.scale) as i32;
+        let side = (20.0 * app.scale) as i32;
+        let middle = (item.rect.top + item.rect.bottom) / 2;
+        let box_rect = Rect {
+            left: item.rect.left + offset,
+            top: middle - side / 2,
+            right: item.rect.left + offset + side,
+            bottom: middle + side / 2,
+        };
+        rounded(
+            item.dc, &box_rect,
+            if app.skip_missing { ACCENT } else { FIELD },
+            if app.skip_missing { ACCENT } else { BORDER },
+            (6.0 * app.scale) as i32
+        );
+        if app.skip_missing {
+            let tick = wide("✓");
+            let mut r = box_rect;
+            DrawTextW(item.dc, tick.as_ptr(), (tick.len() - 1) as i32, &mut r,
+                      0x1 | 0x4 | 0x20);
+        }
+        text_rect.left += (47.0 * app.scale) as i32;
+        text_rect.right -= (9.0 * app.scale) as i32;
+        DrawTextW(item.dc, wide_label.as_ptr(), (wide_label.len() - 1) as i32,
+                  &mut text_rect, format);
+    } else {
+        DrawTextW(item.dc, wide_label.as_ptr(), (wide_label.len() - 1) as i32,
+                  &mut text_rect, format | 0x1); // centered
+    }
+    SelectObject(item.dc, old_font);
+}
+
 enum Event {
     Message(String),
     Done(std::result::Result<Report, String>, bool),
@@ -208,6 +362,11 @@ struct App {
     controls: Vec<H>,
     font: H,
     titlefont: H,
+    bg_brush: H,
+    header_brush: H,
+    field_brush: H,
+    log_brush: H,
+    skip_missing: bool,
     rx: Option<Receiver<Event>>,
     stop: Arc<AtomicBool>,
     busy: bool,
@@ -216,8 +375,12 @@ struct App {
 }
 impl App {
     unsafe fn create(&mut self) {
+        self.bg_brush = CreateSolidBrush(BG);
+        self.header_brush = CreateSolidBrush(HEADER);
+        self.field_brush = CreateSolidBrush(FIELD);
+        self.log_brush = CreateSolidBrush(LOG_BG);
         self.font = CreateFontW(
-            -(18.0 * self.scale) as i32,
+            -(16.0 * self.scale) as i32,
             0,
             0,
             0,
@@ -233,7 +396,7 @@ impl App {
             wide("Segoe UI").as_ptr(),
         );
         self.titlefont = CreateFontW(
-            -(29.0 * self.scale) as i32,
+            -(30.0 * self.scale) as i32,
             0,
             0,
             0,
@@ -252,7 +415,7 @@ impl App {
             ("STATIC", "Notion → Obsidian", 0u32, 0),
             (
                 "STATIC",
-                "Перенос страниц, ссылок, вложений и баз. Полностью локально.",
+                "Перенос экспорта Notion в готовое хранилище Obsidian · локально и безопасно",
                 0,
                 0,
             ),
@@ -277,12 +440,13 @@ impl App {
             (
                 "BUTTON",
                 "Не создавать заглушки отсутствующих страниц Notion (проверено вручную)",
-                0x10000 | 0x3, // BS_AUTOCHECKBOX, disabled by default
+                0x10000 | 0xB, // BS_OWNERDRAW; state is held by App
                 110,
             ),
         ];
         for (class, text, style, id) in defs {
-            let ex = if class == "EDIT" { 0x200 } else { 0 };
+            let ex = 0u32; // No light 3D borders: fields are framed by the parent.
+            let style = if class == "BUTTON" { (style & !0x0f) | 0xB } else { style };
             let h = CreateWindowExW(
                 ex,
                 wide(class).as_ptr(),
@@ -313,10 +477,18 @@ impl App {
             .map(PathBuf::from)
             .unwrap_or(PathBuf::from("."))
             .join("Documents")
-            .join("Notion_Obsidian_v0.4.0");
+            .join("Notion_Obsidian_v0.5.0");
         set(self.controls[6], &fresh_path(default).to_string_lossy());
         EnableWindow(self.controls[11], 0);
         EnableWindow(self.controls[14], 0);
+        // Slight insets provide breathing room without adding custom controls.
+        for i in [3usize, 6] {
+            SendMessageW(self.controls[i], 0x00D3, 3, (10 << 16) | 10); // EM_SETMARGINS
+        }
+        SendMessageW(self.controls[13], 0x00D3, 3, (12 << 16) | 12);
+        for i in [3usize, 6, 13] {
+            SetWindowTheme(self.controls[i], wide("DarkMode_Explorer").as_ptr(), null());
+        }
         DragAcceptFiles(self.hwnd, 1);
         SetTimer(self.hwnd, 1, 100, 0);
         self.layout();
@@ -333,31 +505,32 @@ impl App {
         let h = r.bottom;
         let s = self.scale;
         let v = |n: i32| (n as f32 * s) as i32;
-        let m = v(26);
-        let gap = v(10);
+        let m = v(28);
+        let gap = v(12);
         let btn = v(170);
         let editw = (w - 2 * m - gap - btn).max(v(120));
         let rows = [
-            (m, v(20), w - 2 * m, v(42)),
-            (m, v(66), w - 2 * m, v(28)),
-            (m, v(110), w - 2 * m, v(24)),
-            (m, v(139), editw, v(34)),
-            (m + editw + gap, v(139), btn, v(34)),
-            (m, v(188), w - 2 * m, v(24)),
-            (m, v(217), editw, v(34)),
-            (m + editw + gap, v(217), btn, v(34)),
-            (m, v(265), w - 2 * m, v(26)),
-            (m, v(339), v(180), v(37)),
-            (m + v(190), v(339), v(180), v(37)),
-            (m + v(380), v(339), v(140), v(37)),
-            (m, v(390), w - 2 * m, v(28)),
-            (m, v(426), w - 2 * m, (h - v(500)).max(v(90))),
-            (m, h - v(56), w - 2 * m, v(35)),
-            (m, v(297), w - 2 * m, v(30)),
+            (m + v(17), v(24), w - 2 * m - v(17), v(44)), // Brand title
+            (m, v(77), w - 2 * m, v(24)),          // Subtitle
+            (m, v(127), w - 2 * m, v(24)),         // ZIP label
+            (m + v(12), v(164), editw - v(24), v(28)),
+            (m + editw + gap, v(155), btn, v(46)),
+            (m, v(221), w - 2 * m, v(24)),         // Output label
+            (m + v(12), v(258), editw - v(24), v(28)),
+            (m + editw + gap, v(249), btn, v(46)),
+            (m, v(312), w - 2 * m, v(24)),         // Hint
+            (m, v(401), v(178), v(44)),
+            (m + v(190), v(401), v(178), v(44)),
+            (m + v(380), v(401), v(132), v(44)),
+            (m, v(467), w - 2 * m, v(24)),         // Status
+            (m + v(10), v(506), w - 2 * m - v(20), (h - v(592)).max(v(68))),
+            (m, h - v(62), w - 2 * m, v(42)),      // Open result
+            (m, v(351), w - 2 * m, v(36)),        // Manual skip
         ];
-        for (i, (x, y, w, h)) in rows.iter().enumerate() {
-            MoveWindow(self.controls[i], *x, *y, *w, *h, 1);
+        for (i, (x, y, width, height)) in rows.iter().enumerate() {
+            MoveWindow(self.controls[i], *x, *y, *width, *height, 1);
         }
+        InvalidateRect(self.hwnd, null(), 1);
     }
     unsafe fn log(&self, s: &str) {
         let h = self.controls[13];
@@ -379,7 +552,7 @@ impl App {
         }
         let archive = PathBuf::from(get(self.controls[3]).trim());
         let output = PathBuf::from(get(self.controls[6]).trim());
-        let skip_missing = SendMessageW(self.controls[15], 0xf0, 0, 0) != 0; // BM_GETCHECK
+        let skip_missing = self.skip_missing;
         if !archive.is_file() {
             dialog(self.hwnd, "Выберите существующий ZIP-файл.");
             return;
@@ -536,7 +709,7 @@ impl App {
                 let end = buf.iter().position(|&x| x == 0).unwrap();
                 let path = fresh_path(
                     PathBuf::from(String::from_utf16_lossy(&buf[..end]))
-                        .join("Notion_Obsidian_v0.4.0"),
+                        .join("Notion_Obsidian_v0.5.0"),
                 );
                 set(self.controls[6], &path.to_string_lossy());
             }
@@ -572,6 +745,53 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
     }
     let app = &mut *ptr;
     match msg {
+        0x14 => { // WM_ERASEBKGND
+            if w != 0 {
+                background(hwnd, w as H, app);
+                1
+            } else {
+                0
+            }
+        }
+        0x133 | 0x138 => { // WM_CTLCOLOREDIT / WM_CTLCOLORSTATIC
+            let dc = w as H;
+            let child = l as H;
+            let index = app.controls.iter().position(|&h| h == child);
+            let is_log = index == Some(13);
+            let is_field = index == Some(3) || index == Some(6);
+            let is_header = index == Some(0) || index == Some(1);
+            let background_color =
+                if is_log { LOG_BG } else if is_field { FIELD } else if is_header { HEADER } else { BG };
+            SetBkColor(dc, background_color);
+            SetBkMode(dc, if is_field || is_log { 2 } else { 1 });
+            SetTextColor(dc, if is_log || is_field || index == Some(0)
+                || index == Some(2) || index == Some(5) {
+                TEXT
+            } else if index == Some(12) {
+                ACCENT
+            } else {
+                MUTED
+            });
+            if is_log {
+                app.log_brush
+            } else if is_field {
+                app.field_brush
+            } else if is_header {
+                app.header_brush
+            } else {
+                app.bg_brush
+            }
+        }
+        0x2b => { // WM_DRAWITEM
+            if l != 0 {
+                let item = &*(l as *const DrawItem);
+                if item.control_type == 4 { // ODT_BUTTON
+                    draw_button(item, app);
+                    return 1;
+                }
+            }
+            DefWindowProcW(hwnd, msg, w, l)
+        }
         0x24 => {
             let points = l as *mut Point;
             (*points.add(3)).x = (760.0 * app.scale) as i32;
@@ -594,6 +814,10 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                     app.stop.store(true, Ordering::Relaxed);
                     EnableWindow(app.controls[11], 0);
                     set(app.controls[12], "Отмена…");
+                }
+                110 if !app.busy => {
+                    app.skip_missing = !app.skip_missing;
+                    InvalidateRect(app.controls[15], null(), 1);
                 }
                 109 => {
                     ShellExecuteW(
@@ -640,6 +864,9 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
             KillTimer(hwnd, 1);
             DeleteObject(app.font);
             DeleteObject(app.titlefont);
+            for brush in [app.bg_brush, app.header_brush, app.field_brush, app.log_brush] {
+                DeleteObject(brush);
+            }
             PostQuitMessage(0);
             0
         }
@@ -660,12 +887,12 @@ pub fn launch(archive: Option<PathBuf>) {
             cls: 0,
             win: 0,
             instance,
-            icon: LoadIconW(0, 32512usize as *const u16),
+            icon: LoadIconW(instance, 1usize as *const u16),
             cursor: LoadCursorW(0, 32512usize as *const u16),
-            brush: 16,
+            brush: 0,
             menu: null(),
             name: name.as_ptr(),
-            small_icon: 0,
+            small_icon: LoadIconW(instance, 1usize as *const u16),
         };
         RegisterClassExW(&cls);
         let app = Box::new(App {
@@ -673,6 +900,11 @@ pub fn launch(archive: Option<PathBuf>) {
             controls: vec![],
             font: 0,
             titlefont: 0,
+            bg_brush: 0,
+            header_brush: 0,
+            field_brush: 0,
+            log_brush: 0,
+            skip_missing: false,
             rx: None,
             stop: Arc::new(AtomicBool::new(false)),
             busy: false,
@@ -687,7 +919,7 @@ pub fn launch(archive: Option<PathBuf>) {
         let hwnd = CreateWindowExW(
             0,
             name.as_ptr(),
-            wide("Notion → Obsidian · Rust 0.4.0").as_ptr(),
+            wide("Notion → Obsidian · 0.5.0").as_ptr(),
             0x00cf0000,
             x,
             y,
@@ -703,6 +935,11 @@ pub fn launch(archive: Option<PathBuf>) {
             drop(Box::from_raw(ptr));
             CoUninitialize();
             return;
+        }
+        // Windows 10 1809+ / 11: opt into a dark native titlebar, if supported.
+        let dark = 1i32;
+        if DwmSetWindowAttribute(hwnd, 20, &dark, 4) != 0 {
+            DwmSetWindowAttribute(hwnd, 19, &dark, 4);
         }
         if let Some(archive) = archive {
             set((&(*ptr).controls)[3], &archive.to_string_lossy());
@@ -726,3 +963,4 @@ const _: [(); 80] = [(); std::mem::size_of::<Class>()];
 const _: [(); 48] = [(); std::mem::size_of::<Msg>()];
 const _: [(); 152] = [(); std::mem::size_of::<OpenFile>()];
 const _: [(); 64] = [(); std::mem::size_of::<Browse>()];
+const _: [(); 64] = [(); std::mem::size_of::<DrawItem>()];
