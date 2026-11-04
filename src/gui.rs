@@ -481,7 +481,7 @@ impl App {
             .map(PathBuf::from)
             .unwrap_or(PathBuf::from("."))
             .join("Documents")
-            .join("Notion_Obsidian_v0.5.2");
+            .join("Notion_Obsidian_v0.5.3");
         set(self.controls[6], &fresh_path(default).to_string_lossy());
         EnableWindow(self.controls[11], 0);
         EnableWindow(self.controls[14], 0);
@@ -724,7 +724,7 @@ impl App {
                 let end = buf.iter().position(|&x| x == 0).unwrap();
                 let path = fresh_path(
                     PathBuf::from(String::from_utf16_lossy(&buf[..end]))
-                        .join("Notion_Obsidian_v0.5.2"),
+                        .join("Notion_Obsidian_v0.5.3"),
                 );
                 set(self.controls[6], &path.to_string_lossy());
             }
@@ -935,7 +935,7 @@ pub fn launch(archive: Option<PathBuf>) {
         let hwnd = CreateWindowExW(
             0,
             name.as_ptr(),
-            wide("Notion → Obsidian · 0.5.2").as_ptr(),
+            wide("Notion → Obsidian · 0.5.3").as_ptr(),
             0x00cf0000,
             x,
             y,

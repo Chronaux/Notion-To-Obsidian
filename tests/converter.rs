@@ -610,9 +610,11 @@ fn database_is_embedded_in_parent_as_full_table_block() {
     let out = t.path().join("out");
     let r = convert(&p, &out).unwrap();
     let text = fs::read_to_string(out.join("Root.md")).unwrap();
-    assert!(text.contains("![[DB/DB#^notion-table]]"));
-    assert!(text.contains("Открыть [[DB/DB|таблицу]] при необходимости."));
-    let table = fs::read_to_string(out.join("DB/DB.md")).unwrap();
+    assert!(text.contains("![[Базы данных/DB/DB#^notion-table]]"));
+    assert!(text.contains("Открыть [[Базы данных/DB/DB|таблицу]] при необходимости."));
+    let table = fs::read_to_string(out.join("Базы данных/DB/DB.md")).unwrap();
+    assert_eq!(r.mapping[A], "Root.md");
+    assert_eq!(r.mapping[B], "Базы данных/DB/Question.md");
     assert!(table.contains("| Question") || table.contains("Question]]"));
     assert!(table.contains("Whole answer"));
     assert!(table.contains("\n\n^notion-table\n"));
@@ -621,7 +623,7 @@ fn database_is_embedded_in_parent_as_full_table_block() {
 
 
 #[test]
-fn database_page_and_same_named_table_share_one_folder() {
+fn database_parent_stays_in_article_tree_while_tables_move_to_database_root() {
     let t = root();
     let p = archive(
         t.path(),
@@ -646,20 +648,27 @@ fn database_page_and_same_named_table_share_one_folder() {
     );
     let out = t.path().join("out");
     let report = convert(&p, &out).unwrap();
-    let folder = "Инструкция/Веб Учитель/Поурочное планирование";
-    assert_eq!(report.mapping[B], format!("{folder}/Поурочное планирование.md"));
-    assert!(!out.join("Инструкция/Веб Учитель/Поурочное планирование.md").exists());
+    let folder = "Базы данных/Инструкция/Веб Учитель/Поурочное планирование";
+    assert_eq!(report.mapping[B], "Инструкция/Веб Учитель/Поурочное планирование.md");
+    assert!(!out.join("Инструкция/Веб Учитель/Поурочное планирование/Поурочное планирование.md").exists());
     let table = report.databases[0]["readable_table"].as_str().unwrap();
-    assert_eq!(table, format!("{folder}/Поурочное планирование — таблица.md"));
+    assert_eq!(table, format!("{folder}/Поурочное планирование.md"));
+    assert_eq!(
+        report.databases[0]["base"].as_str().unwrap(),
+        format!("{folder}/Поурочное планирование.base")
+    );
     assert!(out.join(table).is_file());
     assert!(out.join(report.databases[0]["base"].as_str().unwrap()).is_file());
+    let row = "c".repeat(32);
+    assert_eq!(report.mapping[&row], format!("{folder}/Занятие.md"));
     let page = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
-    assert!(page.contains("Поурочное планирование — таблица"));
+    assert!(page.contains(&format!("![[{table}#^notion-table]]")));
+    assert!(page.contains("# Поурочное планирование"));
     assert_eq!(report.audit["passed"], true);
 }
 
 #[test]
-fn standalone_page_with_database_is_kept_inside_database_folder() {
+fn standalone_parent_stays_in_root_and_records_move_to_database_root() {
     let t = root();
     let p = archive(
         t.path(),
@@ -671,14 +680,15 @@ fn standalone_page_with_database_is_kept_inside_database_folder() {
     );
     let out = t.path().join("out");
     let report = convert(&p, &out).unwrap();
-    assert_eq!(report.mapping[A], "План/План.md");
-    assert!(!out.join("План.md").exists());
+    assert_eq!(report.mapping[A], "План.md");
+    assert!(out.join("План.md").exists());
     assert_eq!(
         report.databases[0]["readable_table"].as_str().unwrap(),
-        "План/План — таблица.md"
+        "Базы данных/План/План.md"
     );
-    assert!(out.join("План/План — таблица.md").exists());
-    assert!(out.join("План/Занятие.md").exists());
+    assert!(out.join("Базы данных/План/План.md").exists());
+    assert_eq!(report.mapping[B], "Базы данных/План/Занятие.md");
+    assert!(!out.join("План/Занятие.md").exists());
     assert_eq!(report.audit["passed"], true);
 }
 
@@ -702,8 +712,123 @@ fn database_parent_stays_with_empty_database_without_row_folder() {
     );
     let out = t.path().join("out");
     let report = convert(&p, &out).unwrap();
-    assert_eq!(report.mapping[B], "Главная/Учитель/План/План.md");
-    assert!(!out.join("Главная/Учитель/План.md").exists());
-    assert!(out.join("Главная/Учитель/План/План — таблица.md").is_file());
+    assert_eq!(report.mapping[B], "Главная/Учитель/План.md");
+    assert!(!out.join("Главная/Учитель/План/План.md").exists());
+    assert!(out.join("Базы данных/Главная/Учитель/План/План.md").is_file());
+    assert!(out.join("Базы данных/Главная/Учитель/План/План.base").is_file());
     assert_eq!(report.audit["passed"], true);
+}
+
+
+#[test]
+fn nested_database_subpages_follow_records_and_unrelated_pages_stay_in_instructions() {
+    let t = root();
+    let row_id = "cccccccccccccccccccccccccccccccc";
+    let child_id = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let other_id = "ffffffffffffffffffffffffffffffff";
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Инструкция {A}.md"),
+                format!("# Инструкция\n\n## Учитель\n\n[Задания](Инструкция/Задания%20{B}.md)"),
+            ),
+            s(
+                format!("Инструкция/Задания {B}.md"),
+                format!("# Задания\n\n[Таблица](Задания%20{D}.csv)\n\n[Ряд](Задания/Ряд%20{row_id}.md)"),
+            ),
+            s(
+                format!("Инструкция/Задания {D}_all.csv"),
+                "Имя,Ответ\nРяд,Да\n",
+            ),
+            s(
+                format!("Инструкция/Задания/Ряд {row_id}.md"),
+                format!("# Ряд\n\nОтвет: Да\n\n[Детали](Ряд/Детали%20{child_id}.md)"),
+            ),
+            s(
+                format!("Инструкция/Задания/Ряд/Детали {child_id}.md"),
+                "# Детали\n\nПодробности",
+            ),
+            s(
+                format!("Инструкция/Побочная {other_id}.md"),
+                "# Побочная\n\nОбычная страница инструкции",
+            ),
+        ],
+    );
+    let out = t.path().join("out");
+    let report = convert(&p, &out).unwrap();
+    let folder = "Базы данных/Инструкция/Учитель/Задания";
+    assert_eq!(report.mapping[B], "Инструкция/Учитель/Задания.md");
+    assert_eq!(report.mapping[row_id], format!("{folder}/Ряд.md"));
+    assert_eq!(report.mapping[child_id], format!("{folder}/Ряд/Детали.md"));
+    assert!(report.mapping[other_id].starts_with("Инструкция/"));
+    assert!(!report.mapping[other_id].starts_with("Базы данных/"));
+    let article = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
+    assert!(article.contains(&format!("![[{folder}/Задания#^notion-table]]")));
+    assert!(article.contains(&format!("[[{folder}/Ряд|Ряд]]")));
+    let row = fs::read_to_string(out.join(&report.mapping[row_id])).unwrap();
+    assert!(row.contains(&report.mapping[child_id]));
+    let base_path = report.databases[0]["base"].as_str().unwrap();
+    let base = fs::read_to_string(out.join(base_path)).unwrap();
+    assert!(base.contains(&report.mapping[row_id]));
+    assert!(!base.contains(&report.mapping[B]));
+    assert_eq!(report.audit["passed"], true);
+}
+
+#[test]
+fn databases_with_same_title_in_distinct_sections_do_not_merge() {
+    let t = root();
+    let second_page = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let second_database = "ffffffffffffffffffffffffffffffff";
+    let first_row = "cccccccccccccccccccccccccccccccc";
+    let second_row = "99999999999999999999999999999999";
+    let p = archive(
+        t.path(),
+        vec![
+            s(format!("Инструкция {A}.md"), "# Инструкция"),
+            s(
+                format!("Инструкция/Учитель/Планы {B}.md"),
+                format!("# Планы\n\n[Таблица](Планы%20{D}.csv)"),
+            ),
+            s(
+                format!("Инструкция/Админ/Планы {second_page}.md"),
+                format!("# Планы\n\n[Таблица](Планы%20{second_database}.csv)"),
+            ),
+            s(
+                format!("Инструкция/Учитель/Планы {D}_all.csv"),
+                "Имя,Ответ\nПервый,Да\n",
+            ),
+            s(
+                format!("Инструкция/Админ/Планы {second_database}_all.csv"),
+                "Имя,Ответ\nВторой,Нет\n",
+            ),
+            s(
+                format!("Инструкция/Учитель/Планы/Первый {first_row}.md"),
+                "# Первый\n\nОтвет: Да",
+            ),
+            s(
+                format!("Инструкция/Админ/Планы/Второй {second_row}.md"),
+                "# Второй\n\nОтвет: Нет",
+            ),
+        ],
+    );
+    let out = t.path().join("out");
+    let report = convert(&p, &out).unwrap();
+    assert_eq!(report.audit["passed"], true);
+    assert_eq!(report.mapping[B], "Инструкция/Учитель/Планы.md");
+    assert_eq!(report.mapping[second_page], "Инструкция/Админ/Планы.md");
+    assert_eq!(
+        report.mapping[first_row],
+        "Базы данных/Инструкция/Учитель/Планы/Первый.md"
+    );
+    assert_eq!(
+        report.mapping[second_row],
+        "Базы данных/Инструкция/Админ/Планы/Второй.md"
+    );
+    for db in &report.databases {
+        let table = db["readable_table"].as_str().unwrap();
+        assert!(table.starts_with("Базы данных/Инструкция/"));
+        assert!(out.join(table).exists());
+    }
+    assert_ne!(report.databases[0]["readable_table"], report.databases[1]["readable_table"]);
 }
