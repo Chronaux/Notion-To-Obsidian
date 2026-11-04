@@ -534,7 +534,12 @@ fn database_directory_for_page(page: &Page, dbs: &[Database]) -> Option<String> 
     let suffixed = format!("{} {}-{}", plain, &page.uid[..4], &page.uid[28..]);
     [suffixed, plain].into_iter().find(|folder| {
         dbs.iter().any(|db| {
-            db.folder == *folder || db.folder.starts_with(&(folder.clone() + "/"))
+            // Top-level outline pages can contain many unrelated databases.
+            // Preserve their established root location unless the database
+            // itself has the same directory. Nested articles may own deeper DBs.
+            db.folder == folder.as_str()
+                || (page.source.contains('/')
+                    && db.folder.starts_with(&(folder.clone() + "/")))
         })
     })
 }
@@ -1132,7 +1137,8 @@ impl Converter {
             if let Some(source_dir) = database_directory_for_page(page, &self.dbs) {
                 let destination = directory(&source_dir, &mut dirs, &mut used_dirs);
                 let belongs_to_section = page_folders.get(&page.source).map_or(true, |section| {
-                    destination == *section || destination.starts_with(&(section.clone() + "/"))
+                    destination.as_str() == section.as_str()
+                        || destination.starts_with(&(section.clone() + "/"))
                 });
                 if belongs_to_section {
                     page_folders.insert(page.source.clone(), destination);
