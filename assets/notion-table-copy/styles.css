@@ -1,0 +1,18 @@
+.markdown-preview-view table, .markdown-source-view table, .notion-full-bases-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+.markdown-rendered th, .markdown-rendered td, .notion-full-bases-table th, .notion-full-bases-table td { white-space:pre-wrap !important; overflow-wrap:anywhere; word-break:normal; height:auto !important; max-height:none !important; text-overflow:clip !important; -webkit-line-clamp:unset !important; vertical-align:top; padding:12px 14px; border:1px solid var(--background-modifier-border); }
+.markdown-preview-view table, .markdown-source-view table { --table-white-space:normal; }
+.markdown-preview-view .markdown-preview-sizer { max-width:100% !important; }
+.markdown-rendered td p, .markdown-rendered .table-cell-wrapper { white-space:normal !important; max-height:none !important; overflow:visible !important; }
+.notion-copy-cell { cursor:copy; }
+.notion-copy-cell:hover { background:var(--background-modifier-hover); }
+.notion-copy-cell:focus-visible { outline:2px solid var(--interactive-accent); outline-offset:-2px; }
+.notion-full-bases-wrap { width:100%; height:100%; overflow:auto; padding:12px; }
+.notion-full-bases-table th { position:sticky; top:0; background:var(--background-primary); z-index:1; text-align:left; }
+.notion-full-bases-table td:first-child, .notion-full-bases-table th:first-child { width:26%; }
+/* Generated table blocks are shown fully when embedded in the parent article. */
+.markdown-embed-content { max-height:none !important; overflow:visible !important; }
+.markdown-embed { padding:0; border:0; }
+.markdown-embed-title { display:none; }
+
+/* The exported H1 is the authoritative full title; do not repeat the shortened filename. */
+.inline-title { display:none; }

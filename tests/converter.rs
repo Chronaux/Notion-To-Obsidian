@@ -1,0 +1,505 @@
+use notion_to_obsidian::{convert, hash, safe_name, Converter};
+use std::io::Write;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::{atomic::AtomicBool, Arc},
+};
+use zip::{write::SimpleFileOptions, ZipWriter};
+const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const D: &str = "dddddddddddddddddddddddddddddddd";
+fn archive(root: &Path, files: Vec<(String, Vec<u8>)>) -> PathBuf {
+    let path = root.join("export.zip");
+    let f = fs::File::create(&path).unwrap();
+    let mut z = ZipWriter::new(f);
+    for (name, data) in files {
+        z.start_file(name, SimpleFileOptions::default()).unwrap();
+        z.write_all(&data).unwrap();
+    }
+    z.finish().unwrap();
+    path
+}
+fn s(name: String, text: impl AsRef<str>) -> (String, Vec<u8>) {
+    (name, text.as_ref().as_bytes().to_vec())
+}
+fn root() -> tempfile::TempDir {
+    tempfile::tempdir().unwrap()
+}
+#[test]
+fn csv_full_view_and_duplicate_titles() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Root {A}.md"),
+                format!("# Root\n\n[DB](Root/DB%20{D}.csv)"),
+            ),
+            s(format!("Root/DB {D}.csv"), "Name,Answer\nSame,Second\n"),
+            s(
+                format!("Root/DB {D}_all.csv"),
+                "Name,Answer,Hidden\nSame,First,Secret\nSame,Second,Other\n",
+            ),
+            s(
+                format!("Root/DB/Same {B}.md"),
+                "# Same\n\nAnswer: First\nHidden: Secret",
+            ),
+            s(
+                format!("Root/DB/Same {}.md", "c".repeat(32)),
+                "# Same\n\nAnswer: Second\nHidden: Other",
+            ),
+        ],
+    );
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    assert_eq!(r.stats["source_rows"], 2);
+    assert_eq!(r.row_matching[0]["matched"], 2);
+    assert_eq!(r.audit["passed"], true);
+    assert_eq!(r.databases[0]["view_rows"], 1);
+}
+#[test]
+fn local_attachments_and_external_urls() {
+    let t = root();
+    let ext = "https://example.com/path_(two)?x=1&y=2#anchor";
+    let p=archive(t.path(),vec![s(format!("Root {A}.md"),format!("# Root\n\n[Child](Root/Child%20(one)%20{B}.md)\n![image](Root/image.png)\n[Web]({ext})\n{ext}")),s(format!("Root/Child (one) {B}.md"),"# Child (one)"),("Root/image.png".into(),b"\x89PNG\r\n\x1a\nfixture".to_vec())]);
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Vault/Root.md")).unwrap();
+    assert!(text.contains("[[Root/Child (one)|Child]]"));
+    assert!(text.contains("![[_attachments/"));
+    assert_eq!(text.matches(ext).count(), 2);
+    assert_eq!(r.audit["attachment_hashes_verified"], 1);
+}
+#[test]
+fn missing_notion_and_block() {
+    let t = root();
+    let p=archive(t.path(),vec![s(format!("Root {A}.md"),format!("# Root\n\n[known](https://app.notion.com/p/{B}?pvs=21#{})\nhttps://www.notion.so/Title-{D}?pvs=21","1".repeat(32))),s(format!("Child {B}.md"),"# Child")]);
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    assert_eq!(r.stats["missing_pages"], 1);
+    assert!(r.missing_pages.contains_key(D));
+    assert!(r.warnings.iter().any(|w| w.kind == "block_position_lost"));
+}
+#[test]
+fn code_callout_and_inline_preserved() {
+    let t = root();
+    let p=archive(t.path(),vec![s(format!("Root {A}.md"),"# Root\n\n<aside>\nText\n\n```text\n    x = \"<aside>\"\n[Example](https://example.org)\n```\n</aside>\n\n`<aside>`")]);
+    convert(&p, &t.path().join("out")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Vault/Root.md")).unwrap();
+    assert!(text.contains("> [!note]"));
+    assert!(text.contains(">     x = \"<aside>\""));
+    assert!(text.contains("`<aside>`"));
+}
+#[test]
+fn nested_list_callout_preserves_markdown() {
+    let t = root();
+    let p=archive(t.path(),vec![s(format!("Root {A}.md"),"# Root\n\n- Section\n\n    <aside>\n    Tip\n    </aside>\n\n    ### Heading\n\n    Text\n")]);
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    assert_eq!(r.audit["passed"], true);
+}
+#[test]
+fn table_alias() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Root {A}.md"),
+                format!("# Root\n\n| Link |\n| --- |\n| [Go](Child%20{B}.md) |"),
+            ),
+            s(format!("Child {B}.md"), "# Child"),
+        ],
+    );
+    convert(&p, &t.path().join("out")).unwrap();
+    assert!(fs::read_to_string(t.path().join("out/Vault/Root.md"))
+        .unwrap()
+        .contains("[[Child\\|Go]]"));
+}
+#[test]
+fn windows_names_and_case() {
+    assert_eq!(safe_name("CON"), "_CON");
+    assert!(!safe_name("a:b").contains(':'));
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(format!("Root {A}.md"), "# Same"),
+            s(format!("Child {B}.md"), "# same"),
+        ],
+    );
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    assert_ne!(r.mapping[A].to_lowercase(), r.mapping[B].to_lowercase());
+}
+#[test]
+fn cancel_no_output() {
+    let t = root();
+    let p = archive(t.path(), vec![s(format!("Root {A}.md"), "# Root")]);
+    let c = Converter::new(|_| {}, Arc::new(AtomicBool::new(true)));
+    assert!(c.run(&p, &t.path().join("out")).is_err());
+    assert!(!t.path().join("out").exists());
+}
+#[test]
+fn existing_output_preserved() {
+    let t = root();
+    let p = archive(t.path(), vec![s(format!("Root {A}.md"), "# Root")]);
+    let out = t.path().join("out");
+    fs::create_dir(&out).unwrap();
+    fs::write(out.join("keep"), "keep").unwrap();
+    assert!(convert(&p, &out).is_err());
+    assert_eq!(fs::read_to_string(out.join("keep")).unwrap(), "keep");
+}
+#[test]
+fn traversal_rejected() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s("../escape.md".into(), "no"),
+            s(format!("Root {A}.md"), "# Root"),
+        ],
+    );
+    assert!(convert(&p, &t.path().join("out")).is_err());
+}
+#[test]
+fn nested_export() {
+    let t = root();
+    let inner = archive(t.path(), vec![s(format!("Root {A}.md"), "# Root")]);
+    let bytes = fs::read(inner).unwrap();
+    let p = archive(t.path(), vec![("Export-Part-1.zip".into(), bytes)]);
+    assert_eq!(
+        convert(&p, &t.path().join("out")).unwrap().stats["source_pages"],
+        1
+    );
+}
+#[test]
+fn repeat_is_deterministic() {
+    let t = root();
+    let p = archive(t.path(), vec![s(format!("Root {A}.md"), "# Root\n\nHello")]);
+    let one = convert(&p, &t.path().join("one")).unwrap();
+    let two = convert(&p, &t.path().join("two")).unwrap();
+    assert_eq!(
+        serde_json::to_value(one).unwrap(),
+        serde_json::to_value(two).unwrap()
+    );
+    let a = fs::read(t.path().join("one/Vault/Root.md")).unwrap();
+    let b = fs::read(t.path().join("two/Vault/Root.md")).unwrap();
+    assert_eq!(hash(a), hash(b));
+}
+#[test]
+fn hidden_columns_and_long_answers() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(format!("Root {A}.md"), "# Root"),
+            s(
+                format!("DB {D}_all.csv"),
+                "Name,Ответ,Extra\nRow,\"long\nanswer\",hidden\n",
+            ),
+            s(format!("DB/Row {B}.md"), "# Row\n\nОтвет: long\nanswer"),
+        ],
+    );
+    convert(&p, &t.path().join("out")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Vault/DB/Row.md")).unwrap();
+    assert!(text.contains("long\nanswer"));
+    assert!(text.contains("hidden"));
+}
+#[test]
+fn bare_relation() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Root {A}.md"),
+                format!("# Root\n\nSub-item: Child (Child%20{B}.md)"),
+            ),
+            s(format!("Child {B}.md"), "# Child"),
+        ],
+    );
+    convert(&p, &t.path().join("out")).unwrap();
+    assert!(fs::read_to_string(t.path().join("out/Vault/Root.md"))
+        .unwrap()
+        .contains("Sub-item: Child [[Child]]"));
+}
+#[test]
+fn reference_links() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Root {A}.md"),
+                format!("# Root\n\n[Go][ref]\n\n[ref]: https://app.notion.com/p/{B}"),
+            ),
+            s(format!("Child {B}.md"), "# Child"),
+        ],
+    );
+    convert(&p, &t.path().join("out")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Vault/Root.md")).unwrap();
+    assert!(text.contains("[ref]: Child%2Emd"));
+    assert!(text.contains("[Go][ref]"));
+}
+#[test]
+fn hyphenated_page_uuid() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Root {A}.md"),
+                "# Root\n\nhttps://app.notion.com/p/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            ),
+            s(format!("Child {B}.md"), "# Child"),
+        ],
+    );
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    assert_eq!(r.stats["missing_pages"], 0);
+}
+
+#[test]
+fn full_properties_native_tags_and_headers() {
+    let t = root();
+    let answer = format!(
+        "Первая строка\n{}\nПоследняя строка",
+        "Ответ без сокращений ".repeat(60)
+    );
+    let mut w = csv::Writer::from_writer(vec![]);
+    w.write_record(["Вопрос", "Ответ", "Теги"]).unwrap();
+    w.write_record(["Проверка", &answer, "Веб Учитель, МЭШ"])
+        .unwrap();
+    let csv = String::from_utf8(w.into_inner().unwrap()).unwrap();
+    let p = archive(
+        t.path(),
+        vec![
+            s(format!("Root {A}.md"), "# Root"),
+            s(format!("DB {D}_all.csv"), csv),
+            s(
+                format!("DB/Проверка {B}.md"),
+                format!("# Проверка\n\nОтвет: {answer}\nТеги: Веб Учитель, МЭШ"),
+            ),
+        ],
+    );
+    let out = t.path().join("out");
+    let r = convert(&p, &out).unwrap();
+    let text = fs::read_to_string(out.join("Vault").join(&r.mapping[B])).unwrap();
+    let meta: serde_json::Value = serde_json::from_str(
+        text.strip_prefix("---\n")
+            .unwrap()
+            .split("\n---\n")
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(meta["Ответ"], answer);
+    assert_eq!(meta["Вопрос"], "Проверка");
+    for generated in ["title", "folder", "cssclasses"] {
+        assert!(meta.get(generated).is_none(), "{generated}");
+    }
+    assert_eq!(meta["tags"], serde_json::json!(["Веб_Учитель", "МЭШ"]));
+    assert!(meta
+        .as_object()
+        .unwrap()
+        .keys()
+        .all(|k| !k.starts_with("db_")));
+    let base: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            out.join("Vault")
+                .join(r.databases[0]["base"].as_str().unwrap()),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(base["properties"]["note.Ответ"]["displayName"], "Ответ");
+    assert_eq!(
+        base["properties"]["formula.Название"]["displayName"],
+        "Вопрос"
+    );
+    assert_eq!(
+        base["views"][0]["order"],
+        serde_json::json!(["formula.Название", "note.Ответ", "note.tags"])
+    );
+    let readable = fs::read_to_string(
+        out.join("Vault")
+            .join(r.databases[0]["readable_table"].as_str().unwrap()),
+    )
+    .unwrap();
+    assert!(readable.contains("Последняя строка"));
+    assert!(!readable.contains("…"));
+    assert!(readable.contains("<br>"));
+    assert!(out
+        .join("Vault/.obsidian/plugins/notion-table-copy/main.js")
+        .is_file());
+}
+#[test]
+fn hierarchy_uses_headings_and_preserves_distinct_same_title() {
+    let t = root();
+    let c = "cccccccccccccccccccccccccccccccc";
+    let p=archive(t.path(),vec![s(format!("Инструкция {A}.md"),format!("# Инструкция\n\n## Веб Учитель\n\n[ДЗ](Инструкция/Домашние%20задания%20{B}.md)\n\n## Веб Организация\n\n[ДЗ](Инструкция/Домашние%20задания%20{c}.md)")),s(format!("Инструкция/Домашние задания {B}.md"),"# Домашние задания\n\nТэг: Веб Учитель\n\n[Child](Домашние%20задания/Child%20dddddddddddddddddddddddddddddddd.md)"),s(format!("Инструкция/Домашние задания {c}.md"),"# Домашние задания\n\nТэг: Веб Организация"),s(format!("Инструкция/Домашние задания/Child {D}.md"),"# Child")]);
+    let out = t.path().join("out");
+    let r = convert(&p, &out).unwrap();
+    assert_eq!(r.mapping[B], "Инструкция/Веб Учитель/Домашние задания.md");
+    assert_eq!(
+        r.mapping[c],
+        "Инструкция/Веб Организация/Домашние задания.md"
+    );
+    assert_eq!(
+        r.mapping[D],
+        "Инструкция/Веб Учитель/Домашние задания/Child.md"
+    );
+    let text = fs::read_to_string(out.join("Vault").join(&r.mapping[B])).unwrap();
+    let meta: serde_json::Value = serde_json::from_str(
+        text.strip_prefix("---\n")
+            .unwrap()
+            .split("\n---\n")
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(meta["tags"], serde_json::json!(["Веб_Учитель"]));
+    assert!(!text.split("\n---\n").nth(1).unwrap().contains("Тэг:"));
+}
+#[test]
+fn table_links_survive_and_tags_preserve_single_multiword_label() {
+    let t = root();
+    let mut w = csv::Writer::from_writer(vec![]);
+    w.write_record(["Name", "Ответ", "Тег"]).unwrap();
+    w.write_record([
+        "Row",
+        &format!("Откройте https://app.notion.com/p/{B}"),
+        "Веб Учитель",
+    ])
+    .unwrap();
+    let csv = String::from_utf8(w.into_inner().unwrap()).unwrap();
+    let p = archive(
+        t.path(),
+        vec![
+            s(format!("Root {A}.md"), "# Root"),
+            s(format!("DB {D}_all.csv"), csv),
+            s(
+                format!("DB/Row {B}.md"),
+                format!("# Row\n\nОтвет: Откройте https://app.notion.com/p/{B}\nТег: Веб Учитель"),
+            ),
+        ],
+    );
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    assert_eq!(r.audit["passed"], true);
+}
+
+#[test]
+fn no_service_properties_and_membership_is_in_base() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(format!("Root {A}.md"), "# Root"),
+            s(
+                format!("Надбавки {D}.csv"),
+                "Вопрос,Ответ\nАпелляция,Полный ответ\n",
+            ),
+            s(
+                format!("Надбавки {D}_all.csv"),
+                "Вопрос,Ответ,Тег\nАпелляция,Полный ответ,П1\nДругой вопрос,Другой ответ,П2\n",
+            ),
+            s(
+                format!("Надбавки/Апелляция {B}.md"),
+                "# Апелляция\n\nОтвет: Полный ответ\nТег: П1",
+            ),
+            s(
+                format!("Надбавки/Другой вопрос {}.md", "c".repeat(32)),
+                "# Другой вопрос\n\nОтвет: Другой ответ\nТег: П2",
+            ),
+        ],
+    );
+    let out = t.path().join("out");
+    let r = convert(&p, &out).unwrap();
+    for target in r.mapping.values() {
+        let text = fs::read_to_string(out.join("Vault").join(target)).unwrap();
+        let meta: serde_json::Value = if let Some(rest) = text.strip_prefix("---\n") {
+            serde_json::from_str(rest.split("\n---\n").next().unwrap()).unwrap()
+        } else {
+            serde_json::json!({})
+        };
+        for key in meta.as_object().unwrap().keys() {
+            assert!(!key.starts_with("notion_"), "{key}");
+            assert!(!key.starts_with("db_"), "{key}");
+            assert!(
+                !["title", "folder", "cssclasses"].contains(&key.as_str()),
+                "{key}"
+            );
+        }
+    }
+    assert!(!fs::read_to_string(out.join("Vault").join(&r.mapping[A]))
+        .unwrap()
+        .starts_with("---"));
+    assert_eq!(
+        fs::read(out.join("Vault/.obsidian/app.json")).unwrap(),
+        fs::read(out.join(".obsidian/app.json")).unwrap()
+    );
+    let db = &r.databases[0];
+    let base: serde_json::Value = serde_json::from_slice(
+        &fs::read(out.join("Vault").join(db["base"].as_str().unwrap())).unwrap(),
+    )
+    .unwrap();
+    assert!(base["filters"]["and"][1]
+        .to_string()
+        .contains(&r.mapping[B]));
+    assert!(!base.to_string().contains("notion_database_id"));
+    assert_eq!(base["properties"]["note.Ответ"]["displayName"], "Ответ");
+    assert_eq!(
+        base["views"][0]["sort"][0]["property"],
+        "formula.Порядок вида"
+    );
+    assert!(base["formulas"]["Порядок"]
+        .as_str()
+        .unwrap()
+        .contains(".reduce("));
+    let plugin: serde_json::Value = serde_json::from_slice(
+        &fs::read(out.join("Vault/.obsidian/plugins/notion-table-copy/tables.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plugin["byRowPath"][&r.mapping[B]]["titleColumn"], "Вопрос");
+}
+
+#[test]
+fn toc_restores_missing_notion_block_without_touching_code() {
+    let t = root();
+    let p=archive(t.path(),vec![s(format!("Root {A}.md"),"# Root"),s(format!("Root/Article {B}.md"),"# Article\n\nIntro\n\n---\n\n---\n\n## **Первая тема**\n\nText\n\n```\n## Not a heading\n```\n\n## Вторая тема\n\n### Подтема\n")]);
+    let out = t.path().join("out");
+    let r = convert(&p, &out).unwrap();
+    let text = fs::read_to_string(out.join("Vault").join(&r.mapping[B])).unwrap();
+    assert!(text.contains("**Содержание**"));
+    assert!(text.contains("[[#Первая тема|Первая тема]]"));
+    assert!(text.contains("[[#Вторая тема#Подтема|Подтема]]"));
+    assert!(!text.contains("[[#Not a heading"));
+    assert!(text.contains("## Not a heading"));
+    assert!(text.find("**Содержание**").unwrap() < text.find("## **Первая тема**").unwrap());
+}
+#[test]
+fn callout_icons_become_native_types_and_titles() {
+    let t = root();
+    let p=archive(t.path(),vec![s(format!("Root {A}.md"),"# Root\n\n<aside>\n📚\n\n**Ссылки на инструкции**\n\nText\n</aside>\n\n<aside>\n💡 Совет без потери текста\n</aside>\n\n<aside>\n⚠️\n\nОсторожно\n</aside>\n")]);
+    let out = t.path().join("out");
+    convert(&p, &out).unwrap();
+    let text = fs::read_to_string(out.join("Vault/Root.md")).unwrap();
+    assert!(text.contains("[!info] Ссылки на инструкции"));
+    assert!(text.contains("[!tip]"));
+    assert!(text.contains("[!warning]"));
+    assert!(text.contains("Совет без потери текста"));
+    assert!(!text.contains('📚'));
+    assert!(!text.contains('💡'));
+    assert!(!text.contains('⚠'));
+}
+#[test]
+fn database_is_embedded_in_parent_as_full_table_block() {
+    let t = root();
+    let p=archive(t.path(),vec![s(format!("Root {A}.md"),format!("# Root\n\n### Вопрос-ответ\n\n[Questions](DB%20{D}.csv)\n\nОткрыть [таблицу](DB%20{D}.csv) при необходимости.")),s(format!("DB {D}_all.csv"),"Вопрос,Ответ\nQuestion,Whole answer\n"),s(format!("DB/Question {B}.md"),"# Question\n\nОтвет: Whole answer")]);
+    let out = t.path().join("out");
+    let r = convert(&p, &out).unwrap();
+    let text = fs::read_to_string(out.join("Vault/Root.md")).unwrap();
+    assert!(text.contains("![[DB/DB#^notion-table]]"));
+    assert!(text.contains("Открыть [[DB/DB|таблицу]] при необходимости."));
+    let table = fs::read_to_string(out.join("Vault/DB/DB.md")).unwrap();
+    assert!(table.contains("| Question") || table.contains("Question]]"));
+    assert!(table.contains("Whole answer"));
+    assert!(table.contains("\n\n^notion-table\n"));
+    assert_eq!(r.stats["databases_embedded_inline"], 1);
+}
