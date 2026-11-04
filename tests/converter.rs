@@ -390,6 +390,61 @@ fn full_properties_native_tags_and_headers() {
         .is_file());
 }
 #[test]
+fn no_synthetic_folder_summaries_but_page_toc_is_kept() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Инструкция {A}.md"),
+                format!(
+                    "# Инструкция\n\n## Веб Учитель\n\n[Статья](Инструкция/Статья%20{B}.md)\n\n## Веб Организация\n\nДругой раздел"
+                ),
+            ),
+            s(
+                format!("Инструкция/Статья {B}.md"),
+                "# Статья\n\n## Первое\n\nСодержание первой темы\n\n## Второе\n\nСодержание второй темы",
+            ),
+        ],
+    );
+    let out = t.path().join("out");
+    let report = convert(&p, &out).unwrap();
+    assert_eq!(report.audit["passed"], true);
+    assert_eq!(report.stats["sections"], 1);
+    let article = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
+    assert!(article.contains("**Содержание**"));
+    assert!(article.contains("[[#Первое|Первое]]"));
+    assert!(article.contains("[[#Второе|Второе]]"));
+    let unwanted = out.join("Инструкция/Веб Учитель/Оглавление.md");
+    assert!(!unwanted.exists(), "a folder must not get a generated index note");
+    assert!(!out.join("Инструкция/Веб Организация/Оглавление.md").exists());
+    let root_doc = fs::read_to_string(out.join(&report.mapping[A])).unwrap();
+    assert!(root_doc.contains("Веб Учитель"));
+    assert!(root_doc.contains("Веб Организация"));
+}
+
+#[test]
+fn a_real_page_named_oglavlenie_is_preserved() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Инструкция {A}.md"),
+                format!("# Инструкция\n\n## Веб Учитель\n\n[Оглавление](Инструкция/Оглавление%20{B}.md)"),
+            ),
+            s(format!("Инструкция/Оглавление {B}.md"), "# Оглавление\n\nРеальная заметка Notion"),
+        ],
+    );
+    let out = t.path().join("out");
+    let report = convert(&p, &out).unwrap();
+    let note = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
+    assert!(note.contains("Реальная заметка Notion"));
+    assert_eq!(report.mapping[B], "Инструкция/Веб Учитель/Оглавление.md");
+    assert_eq!(report.audit["passed"], true);
+}
+
+#[test]
 fn hierarchy_uses_headings_and_preserves_distinct_same_title() {
     let t = root();
     let c = "cccccccccccccccccccccccccccccccc";
