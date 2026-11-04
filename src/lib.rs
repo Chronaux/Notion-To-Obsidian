@@ -590,7 +590,7 @@ impl Converter {
             section_nodes: BTreeMap::new(),
             skip_missing_pages: false,
             report: Report {
-                version: "0.5.4".into(),
+                version: "0.5.5".into(),
                 ..Default::default()
             },
             cancel,
@@ -999,6 +999,7 @@ impl Converter {
                 );
             }
             self.report.row_matching.push(json!({"database":db.uid,"rows":db.rows.len(),"matched":matches.len(),"unmatched":remaining.len()}));
+            (self.progress)(&format!("Сопоставлено баз: {}/{}", di + 1, self.dbs.len()));
         }
         Ok(())
     }
@@ -1841,6 +1842,9 @@ impl Converter {
                     format!("---\n{}\n---\n\n{}\n", pretty(&meta), body.trim_end()).into_bytes()
                 },
             );
+            if pi % 8 == 0 || pi + 1 == self.pages.len() {
+                (self.progress)(&format!("Обработано страниц: {}/{}", pi + 1, self.pages.len()));
+            }
         }
         let mut table_data = json!({"byPage":{},"byRowPath":{}});
         for db in self.dbs.clone() {
@@ -2244,6 +2248,7 @@ impl Converter {
         let summary=format!("# Отчёт о переносе\n\n- Исходных страниц: **{}**\n- Записей баз: **{}**\n- Баз: **{}**\n- Вложений: **{}**\n- Недостающих страниц: **{}**\n- Пропущенных вручную страниц Notion: **{}**\n- Ссылок на отдельные блоки без точной позиции: **{}** (исходные URL сохранены в отчёте)\n\nСтруктурный аудит: **пройден**. Внутренние ссылки разрешаются, контрольные суммы вложений совпадают.\n\nПредупреждений: {}. Подробности и исходные адреса — в .notion-to-obsidian/migration-report.json.\n",self.report.stats["source_pages"],self.report.stats["source_rows"],self.dbs.len(),self.assets.len(),self.report.missing_pages.len(),self.report.skipped_pages.len(),self.report.block_link_fallbacks.len(),self.report.warnings.len());
         self.output
             .insert("Отчёт о переносе.md".into(), summary.into_bytes());
+        (self.progress)("Сохранение хранилища…");
         let parent = destination
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -2253,11 +2258,14 @@ impl Converter {
             .prefix(".notion-convert-")
             .tempdir_in(parent)
             .map_err(|e| e.to_string())?;
-        for (name, data) in &self.output {
+        for (index, (name, data)) in self.output.iter().enumerate() {
             self.check()?;
             let path = stage.path().join(name);
             fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
             fs::write(path, data).map_err(|e| e.to_string())?;
+            if index % 8 == 0 || index + 1 == self.output.len() {
+                (self.progress)(&format!("Сохранено файлов: {}/{}", index + 1, self.output.len()));
+            }
         }
         fs::create_dir_all(stage.path().join(".notion-to-obsidian")).map_err(|e| e.to_string())?;
         fs::write(
@@ -2265,7 +2273,7 @@ impl Converter {
             pretty(&self.report),
         )
         .map_err(|e| e.to_string())?;
-        let state = json!({"version":"0.5.4","archive_sha256":hash(fs::read(archive).map_err(|e|e.to_string())?),"pages":self.pages.iter().map(|p|(p.uid.clone(),json!({"path":p.target,"source_sha256":hash(&p.text),"output_sha256":hash(&self.output[&p.target]),"database_id":p.db,"row_order":p.order,"view_order":p.view_order}))).collect::<BTreeMap<_,_>>()});
+        let state = json!({"version":"0.5.5","archive_sha256":hash(fs::read(archive).map_err(|e|e.to_string())?),"pages":self.pages.iter().map(|p|(p.uid.clone(),json!({"path":p.target,"source_sha256":hash(&p.text),"output_sha256":hash(&self.output[&p.target]),"database_id":p.db,"row_order":p.order,"view_order":p.view_order}))).collect::<BTreeMap<_,_>>()});
         fs::write(stage.path().join(".notion-to-obsidian/import-state.json"), pretty(&state))
             .map_err(|e| e.to_string())?;
         fs::write(stage.path().join(".notion-to-obsidian/Открыть.txt"),"В Obsidian откройте папку результата как хранилище. Включите встроенный модуль Bases. Начните с заметки «Начать здесь».\n").map_err(|e|e.to_string())?;
