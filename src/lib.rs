@@ -543,6 +543,7 @@ pub struct Report {
     pub stats: BTreeMap<String, usize>,
     pub warnings: Vec<Warning>,
     pub missing_pages: BTreeMap<String, Missing>,
+    pub skipped_pages: BTreeMap<String, Missing>,
     pub databases: Vec<Value>,
     pub mapping: BTreeMap<String, String>,
     pub row_matching: Vec<Value>,
@@ -560,6 +561,7 @@ pub struct Converter {
     section_nodes: BTreeMap<String, Vec<usize>>,
     section_indexes: BTreeMap<String, String>,
     pub report: Report,
+    skip_missing_pages: bool,
     cancel: Arc<AtomicBool>,
     progress: Box<dyn Fn(&str) + Send>,
 }
@@ -576,6 +578,7 @@ impl Converter {
             output: BTreeMap::new(),
             section_nodes: BTreeMap::new(),
             section_indexes: BTreeMap::new(),
+            skip_missing_pages: false,
             report: Report {
                 version: "0.4.0".into(),
                 ..Default::default()
@@ -583,6 +586,12 @@ impl Converter {
             cancel,
             progress: Box::new(progress),
         }
+    }
+    /// A Markdown & CSV ZIP does not identify archived pages.
+    /// Enable this only when the user has verified that missing pages may be omitted.
+    pub fn skip_missing_pages(mut self, skip: bool) -> Self {
+        self.skip_missing_pages = skip;
+        self
     }
     fn check(&self) -> Result<()> {
         if self.cancel.load(Ordering::Relaxed) {
@@ -1184,7 +1193,21 @@ impl Converter {
             self.targets.insert(name.clone(), target);
         }
     }
-    fn missing(&mut self, uid: &str, url: &str, source: &str) -> String {
+    fn missing(&mut self, uid: &str, url: &str, source: &str, has_notion_id: bool) -> String {
+        if self.skip_missing_pages && has_notion_id {
+            // ID-less paths use synthetic hashes and must not be mistaken for Notion pages.
+            let item = self.report.skipped_pages.entry(uid.into()).or_insert_with(|| Missing {
+                target: format!("https://www.notion.so/{uid}"),
+                ..Default::default()
+            });
+            if !item.urls.iter().any(|s| s == url) {
+                item.urls.push(url.into());
+            }
+            if !item.sources.iter().any(|s| s == source) {
+                item.sources.push(source.into());
+            }
+            return item.target.clone();
+        }
         if !self.report.missing_pages.contains_key(uid) {
             let target = self.reserve(
                 format!("_Недостающие страницы/Страница-{}.md", &uid[..12]),
@@ -1218,9 +1241,9 @@ impl Converter {
             let target = if let Some(target) = self.ids.get(&uid) {
                 target.clone()
             } else {
-                self.missing(&uid, &url, source)
+                self.missing(&uid, &url, source, true)
             };
-            if !anchor.is_empty() {
+            if !anchor.is_empty() && !target.starts_with("https://") {
                 self.warn("block_position_lost", source, &url);
                 anchor.clear();
             }
@@ -1241,14 +1264,15 @@ impl Converter {
         let target = if let Some(target) = target {
             target
         } else {
-            self.warn("missing_local_link", source, &url);
-            let uid = page_ids(&path)
-                .last()
-                .cloned()
-                .unwrap_or(hash(&targetpath)[..32].into());
-            self.missing(&uid, &url, source)
+            let notion_uid = page_ids(&path).last().cloned();
+            let uid = notion_uid.clone().unwrap_or(hash(&targetpath)[..32].into());
+            let unresolved = self.missing(&uid, &url, source, notion_uid.is_some());
+            if !unresolved.starts_with("https://") {
+                self.warn("missing_local_link", source, &url);
+            }
+            unresolved
         };
-        if rx(r"^[a-fA-F0-9-]{32,36}$").is_match(&anchor) {
+        if !target.starts_with("https://") && rx(r"^[a-fA-F0-9-]{32,36}$").is_match(&anchor) {
             self.warn("block_position_lost", source, &url);
             anchor.clear();
         }
@@ -1257,16 +1281,24 @@ impl Converter {
     }
     fn wiki(target: &str, label: &str, embed: bool, table: bool, anchor: &str) -> String {
         let target = target.strip_suffix(".md").unwrap_or(target);
-        let target = if anchor.is_empty() {
-            target.into()
-        } else {
-            format!("{target}#{anchor}")
-        };
         let label = label
             .chars()
             .map(|c| if "[]\r\n|".contains(c) { ' ' } else { c })
             .collect::<String>();
         let label = label.trim();
+        if target.starts_with("https://") {
+            let url = if anchor.is_empty() { target.to_string() } else { format!("{target}#{anchor}") };
+            // A missing page must not be rendered as a remote image/embed.
+            return format!(
+                "[{}]({url})",
+                if label.is_empty() { "Страница Notion" } else { label }
+            );
+        }
+        let target = if anchor.is_empty() {
+            target.into()
+        } else {
+            format!("{target}#{anchor}")
+        };
         format!(
             "{}[[{}{}]]",
             if embed { "!" } else { "" },
@@ -1284,6 +1316,9 @@ impl Converter {
         let text = defs
             .replace_all(text, |c: &regex::Captures| {
                 let line = if let Some((target, anchor)) = self.resolve(&c[2], source) {
+                    if target.starts_with("https://") {
+                        format!("{}{}{}{}", &c[1], target, if anchor.is_empty() { String::new() } else { format!("#{anchor}") }, &c[3])
+                    } else {
                     let own = self.targets.get(source).map(String::as_str).unwrap_or("");
                     let a = parent(own)
                         .split('/')
@@ -1318,6 +1353,7 @@ impl Converter {
                         },
                         &c[3]
                     )
+                    }
                 } else {
                     c[0].to_string()
                 };
@@ -1385,6 +1421,11 @@ impl Converter {
             }
             if notion(url) {
                 if let Some((target, anchor)) = self.resolve(url, source) {
+                    if target.starts_with("https://") {
+                        out.push_str(raw);
+                        cursor = m.end();
+                        continue;
+                    }
                     let label = self
                         .pages
                         .iter()
@@ -1922,7 +1963,7 @@ impl Converter {
             pretty(&json!({"showInlineTitle":false})).into_bytes(),
         );
         for (uid, item) in &self.report.missing_pages {
-            self.output.insert(item.target.clone(),format!("# Страница отсутствовала в экспорте\n\n> [!warning]\n> Содержимое не перенесено. Это заглушка.\n\nИдентификатор Notion: `{uid}`. Исходные адреса и места использования указаны в migration-report.json рядом с Vault.\n").into_bytes());
+            self.output.insert(item.target.clone(),format!("# Страница отсутствовала в экспорте\n\n> [!warning]\n> Содержимое не перенесено. Это заглушка.\n\nИдентификатор Notion: `{uid}`. Исходные адреса и места использования указаны в .notion-to-obsidian/migration-report.json.\n").into_bytes());
         }
         for (source, target) in &self.assets {
             self.output.insert(target.clone(), files[source].clone());
@@ -1936,8 +1977,9 @@ impl Converter {
         self.report
             .stats
             .insert("missing_pages".into(), self.report.missing_pages.len());
+        self.report.stats.insert("skipped_pages".into(), self.report.skipped_pages.len());
         self.report.stats.insert("bases".into(), self.dbs.len());
-        let home=format!("# Инструкция — экспорт v0.4.0\n\nОткройте эту папку как хранилище. Основной вид — таблицы с полным текстом; для фильтрации доступны **Bases / Базы**.\n\n## Главная страница\n\n{}\n\n## Базы\n\n{}\n\n## Как пользоваться\n\n- Поиск по содержимому: Ctrl+Shift+F.\n- Переход к заметке: Ctrl+O.\n- Полные ответы видны на страницах таблиц и в отдельных заметках.\n- Копирование одним кликом: Настройки → Сторонние плагины → включите Notion Full Tables. Плагин уже находится в этом хранилище; скачивать его не нужно.\n- В Bases после включения плагина доступен вид «Полный текст · копировать».\n- Теги сохранены в стандартном свойстве tags. Пробелы в тегах заменены подчёркиваниями.\n- Экспортированный вид — снимок состава строк.\n- Недостающие страницы обозначены заглушками.\n- Повторный запуск создаёт отдельное хранилище, без слияния локальных правок.\n",self.pages.iter().filter(|p|!p.source.contains('/')).map(|p|format!("- {}",Self::wiki(&p.target,&p.title,false,false,""))).collect::<Vec<_>>().join("\n"),self.dbs.iter().map(|d|format!("- {}",Self::wiki(&d.target,&d.title,false,false,""))).collect::<Vec<_>>().join("\n"));
+        let home=format!("# Инструкция — экспорт v0.4.0\n\nОткройте эту папку как хранилище. Основной вид — таблицы с полным текстом; для фильтрации доступны **Bases / Базы**.\n\n## Главная страница\n\n{}\n\n## Базы\n\n{}\n\n## Как пользоваться\n\n- Поиск по содержимому: Ctrl+Shift+F.\n- Переход к заметке: Ctrl+O.\n- Полные ответы видны на страницах таблиц и в отдельных заметках.\n- Копирование одним кликом: Настройки → Сторонние плагины → включите Notion Full Tables. Плагин уже находится в этом хранилище; скачивать его не нужно.\n- В Bases после включения плагина доступен вид «Полный текст · копировать».\n- Теги сохранены в стандартном свойстве tags. Пробелы в тегах заменены подчёркиваниями.\n- Экспортированный вид — снимок состава строк.\n- Недостающие страницы обозначены заглушками, если не включён ручной пропуск.\n- Повторный запуск создаёт отдельное хранилище, без слияния локальных правок.\n",self.pages.iter().filter(|p|!p.source.contains('/')).map(|p|format!("- {}",Self::wiki(&p.target,&p.title,false,false,""))).collect::<Vec<_>>().join("\n"),self.dbs.iter().map(|d|format!("- {}",Self::wiki(&d.target,&d.title,false,false,""))).collect::<Vec<_>>().join("\n"));
         self.output
             .insert("Начать здесь.md".into(), home.into_bytes());
         Ok(())
@@ -2138,7 +2180,7 @@ impl Converter {
         self.paths(&files);
         self.render(&files)?;
         self.audit(&files)?;
-        let summary=format!("# Отчёт о переносе\n\n- Исходных страниц: **{}**\n- Записей баз: **{}**\n- Баз: **{}**\n- Вложений: **{}**\n- Недостающих страниц: **{}**\n\nСтруктурный аудит: **пройден**. Внутренние ссылки разрешаются, контрольные суммы вложений совпадают.\n\nПредупреждений: {}. Подробности и исходные адреса — в migration-report.json рядом с Vault.\n",self.report.stats["source_pages"],self.report.stats["source_rows"],self.dbs.len(),self.assets.len(),self.report.missing_pages.len(),self.report.warnings.len());
+        let summary=format!("# Отчёт о переносе\n\n- Исходных страниц: **{}**\n- Записей баз: **{}**\n- Баз: **{}**\n- Вложений: **{}**\n- Недостающих страниц: **{}**\n- Пропущенных вручную страниц Notion: **{}**\n\nСтруктурный аудит: **пройден**. Внутренние ссылки разрешаются, контрольные суммы вложений совпадают.\n\nПредупреждений: {}. Подробности и исходные адреса — в .notion-to-obsidian/migration-report.json.\n",self.report.stats["source_pages"],self.report.stats["source_rows"],self.dbs.len(),self.assets.len(),self.report.missing_pages.len(),self.report.skipped_pages.len(),self.report.warnings.len());
         self.output
             .insert("Отчёт о переносе.md".into(), summary.into_bytes());
         let parent = destination
@@ -2152,30 +2194,26 @@ impl Converter {
             .map_err(|e| e.to_string())?;
         for (name, data) in &self.output {
             self.check()?;
-            let path = stage.path().join("Vault").join(name);
+            let path = stage.path().join(name);
             fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
             fs::write(path, data).map_err(|e| e.to_string())?;
-            if name.starts_with(".obsidian/") {
-                let outer = stage.path().join(name);
-                fs::create_dir_all(outer.parent().unwrap()).map_err(|e| e.to_string())?;
-                fs::write(outer, data).map_err(|e| e.to_string())?;
-            }
         }
+        fs::create_dir_all(stage.path().join(".notion-to-obsidian")).map_err(|e| e.to_string())?;
         fs::write(
-            stage.path().join("migration-report.json"),
+            stage.path().join(".notion-to-obsidian/migration-report.json"),
             pretty(&self.report),
         )
         .map_err(|e| e.to_string())?;
         let state = json!({"version":"0.4.0","archive_sha256":hash(fs::read(archive).map_err(|e|e.to_string())?),"pages":self.pages.iter().map(|p|(p.uid.clone(),json!({"path":p.target,"source_sha256":hash(&p.text),"output_sha256":hash(&self.output[&p.target]),"database_id":p.db,"row_order":p.order,"view_order":p.view_order}))).collect::<BTreeMap<_,_>>()});
-        fs::write(stage.path().join("import-state.json"), pretty(&state))
+        fs::write(stage.path().join(".notion-to-obsidian/import-state.json"), pretty(&state))
             .map_err(|e| e.to_string())?;
-        fs::write(stage.path().join("Открыть.txt"),"В Obsidian откройте вложенную папку Vault как хранилище. Включите встроенный модуль Bases. Начните с заметки «Начать здесь».\n").map_err(|e|e.to_string())?;
+        fs::write(stage.path().join(".notion-to-obsidian/Открыть.txt"),"В Obsidian откройте папку результата как хранилище. Включите встроенный модуль Bases. Начните с заметки «Начать здесь».\n").map_err(|e|e.to_string())?;
         self.check()?;
         if destination.exists() {
             return Err("Папка результата появилась во время работы.".into());
         }
         fs::rename(stage.path(), destination).map_err(|e| e.to_string())?;
-        (self.progress)("Готово. Откройте вложенную папку Vault в Obsidian.");
+        (self.progress)("Готово. Откройте папку результата в Obsidian.");
         Ok(self.report)
     }
 }

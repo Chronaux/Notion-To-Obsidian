@@ -63,7 +63,7 @@ fn local_attachments_and_external_urls() {
     let ext = "https://example.com/path_(two)?x=1&y=2#anchor";
     let p=archive(t.path(),vec![s(format!("Root {A}.md"),format!("# Root\n\n[Child](Root/Child%20(one)%20{B}.md)\n![image](Root/image.png)\n[Web]({ext})\n{ext}")),s(format!("Root/Child (one) {B}.md"),"# Child (one)"),("Root/image.png".into(),b"\x89PNG\r\n\x1a\nfixture".to_vec())]);
     let r = convert(&p, &t.path().join("out")).unwrap();
-    let text = fs::read_to_string(t.path().join("out/Vault/Root.md")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Root.md")).unwrap();
     assert!(text.contains("[[Root/Child (one)|Child]]"));
     assert!(text.contains("![[_attachments/"));
     assert_eq!(text.matches(ext).count(), 2);
@@ -79,11 +79,71 @@ fn missing_notion_and_block() {
     assert!(r.warnings.iter().any(|w| w.kind == "block_position_lost"));
 }
 #[test]
+fn verified_missing_pages_can_be_skipped_without_broken_wikilinks() {
+    let t = root();
+    let p = archive(t.path(), vec![s(
+        format!("Root {A}.md"),
+        format!("# Root\n\n[Archived](https://app.notion.com/p/{D})\n\n![Embedded page](https://app.notion.com/p/{D})\n\n[Relative](Archived%20{D}.md)\n\n[Block](https://www.notion.so/{D}#{B})\n\n[Reference][old]\n\n[old]: https://www.notion.so/{D}\n\nhttps://www.notion.so/{D}"),
+    )]);
+    let r = notion_to_obsidian::Converter::new(
+        |_| {},
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    ).skip_missing_pages(true).run(&p, &t.path().join("out")).unwrap();
+    let body = fs::read_to_string(t.path().join("out/Root.md")).unwrap();
+    assert_eq!(r.stats["missing_pages"], 0);
+    assert_eq!(r.stats["skipped_pages"], 1);
+    assert_eq!(r.skipped_pages[D].sources.len(), 1);
+    assert!(r.skipped_pages[D].urls.iter().any(|url| url.contains("Archived")));
+    assert!(body.contains(&format!("[Archived](https://www.notion.so/{D})")));
+    assert!(body.contains(&format!("[Embedded page](https://www.notion.so/{D})")));
+    assert!(!body.contains("![Embedded page]"));
+    assert!(body.contains(&format!("[Relative](https://www.notion.so/{D})")));
+    assert!(body.contains(&format!("[Block](https://www.notion.so/{D}#{B})")));
+    assert!(body.contains(&format!("[old]: https://www.notion.so/{D}")));
+    assert!(!body.contains("[[_Недостающие страницы/"));
+    assert!(!t.path().join("out/_Недостающие страницы").exists());
+    assert!(!r.warnings.iter().any(|w| w.kind == "block_position_lost"));
+    assert_eq!(r.audit["passed"], true);
+    let report: serde_json::Value = serde_json::from_slice(
+        &fs::read(t.path().join("out/.notion-to-obsidian/migration-report.json")).unwrap()
+    ).unwrap();
+    assert_eq!(report["skipped_pages"][D]["target"], format!("https://www.notion.so/{D}"));
+}
+
+#[test]
+fn skip_mode_keeps_placeholders_for_links_without_real_page_id() {
+    let t = root();
+    let p = archive(t.path(), vec![s(format!("Root {A}.md"), "# Root\n\n[Unknown](Missing.md)")]);
+    let r = notion_to_obsidian::Converter::new(
+        |_| {},
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    ).skip_missing_pages(true).run(&p, &t.path().join("out")).unwrap();
+    assert_eq!(r.stats["missing_pages"], 1);
+    assert_eq!(r.stats["skipped_pages"], 0);
+    assert_eq!(r.audit["passed"], true);
+    assert!(t.path().join("out/_Недостающие страницы").exists());
+}
+
+#[test]
+fn output_folder_is_the_vault_root() {
+    let t = root();
+    let p = archive(t.path(), vec![s(format!("Root {A}.md"), "# Root")]);
+    let out = t.path().join("out");
+    convert(&p, &out).unwrap();
+    assert!(out.join("Root.md").is_file());
+    assert!(out.join(".obsidian/app.json").is_file());
+    assert!(out.join(".notion-to-obsidian/migration-report.json").is_file());
+    assert!(out.join(".notion-to-obsidian/import-state.json").is_file());
+    assert!(!out.join("Vault").exists());
+    assert!(!out.join("migration-report.json").exists());
+}
+
+#[test]
 fn code_callout_and_inline_preserved() {
     let t = root();
     let p=archive(t.path(),vec![s(format!("Root {A}.md"),"# Root\n\n<aside>\nText\n\n```text\n    x = \"<aside>\"\n[Example](https://example.org)\n```\n</aside>\n\n`<aside>`")]);
     convert(&p, &t.path().join("out")).unwrap();
-    let text = fs::read_to_string(t.path().join("out/Vault/Root.md")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Root.md")).unwrap();
     assert!(text.contains("> [!note]"));
     assert!(text.contains(">     x = \"<aside>\""));
     assert!(text.contains("`<aside>`"));
@@ -109,7 +169,7 @@ fn table_alias() {
         ],
     );
     convert(&p, &t.path().join("out")).unwrap();
-    assert!(fs::read_to_string(t.path().join("out/Vault/Root.md"))
+    assert!(fs::read_to_string(t.path().join("out/Root.md"))
         .unwrap()
         .contains("[[Child\\|Go]]"));
 }
@@ -179,8 +239,8 @@ fn repeat_is_deterministic() {
         serde_json::to_value(one).unwrap(),
         serde_json::to_value(two).unwrap()
     );
-    let a = fs::read(t.path().join("one/Vault/Root.md")).unwrap();
-    let b = fs::read(t.path().join("two/Vault/Root.md")).unwrap();
+    let a = fs::read(t.path().join("one/Root.md")).unwrap();
+    let b = fs::read(t.path().join("two/Root.md")).unwrap();
     assert_eq!(hash(a), hash(b));
 }
 #[test]
@@ -198,7 +258,7 @@ fn hidden_columns_and_long_answers() {
         ],
     );
     convert(&p, &t.path().join("out")).unwrap();
-    let text = fs::read_to_string(t.path().join("out/Vault/DB/Row.md")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/DB/Row.md")).unwrap();
     assert!(text.contains("long\nanswer"));
     assert!(text.contains("hidden"));
 }
@@ -216,7 +276,7 @@ fn bare_relation() {
         ],
     );
     convert(&p, &t.path().join("out")).unwrap();
-    assert!(fs::read_to_string(t.path().join("out/Vault/Root.md"))
+    assert!(fs::read_to_string(t.path().join("out/Root.md"))
         .unwrap()
         .contains("Sub-item: Child [[Child]]"));
 }
@@ -234,7 +294,7 @@ fn reference_links() {
         ],
     );
     convert(&p, &t.path().join("out")).unwrap();
-    let text = fs::read_to_string(t.path().join("out/Vault/Root.md")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Root.md")).unwrap();
     assert!(text.contains("[ref]: Child%2Emd"));
     assert!(text.contains("[Go][ref]"));
 }
@@ -280,7 +340,7 @@ fn full_properties_native_tags_and_headers() {
     );
     let out = t.path().join("out");
     let r = convert(&p, &out).unwrap();
-    let text = fs::read_to_string(out.join("Vault").join(&r.mapping[B])).unwrap();
+    let text = fs::read_to_string(out.clone().join(&r.mapping[B])).unwrap();
     let meta: serde_json::Value = serde_json::from_str(
         text.strip_prefix("---\n")
             .unwrap()
@@ -302,7 +362,7 @@ fn full_properties_native_tags_and_headers() {
         .all(|k| !k.starts_with("db_")));
     let base: serde_json::Value = serde_json::from_slice(
         &fs::read(
-            out.join("Vault")
+            out.clone()
                 .join(r.databases[0]["base"].as_str().unwrap()),
         )
         .unwrap(),
@@ -318,7 +378,7 @@ fn full_properties_native_tags_and_headers() {
         serde_json::json!(["formula.Название", "note.Ответ", "note.tags"])
     );
     let readable = fs::read_to_string(
-        out.join("Vault")
+        out.clone()
             .join(r.databases[0]["readable_table"].as_str().unwrap()),
     )
     .unwrap();
@@ -326,7 +386,7 @@ fn full_properties_native_tags_and_headers() {
     assert!(!readable.contains("…"));
     assert!(readable.contains("<br>"));
     assert!(out
-        .join("Vault/.obsidian/plugins/notion-table-copy/main.js")
+        .join(".obsidian/plugins/notion-table-copy/main.js")
         .is_file());
 }
 #[test]
@@ -345,7 +405,7 @@ fn hierarchy_uses_headings_and_preserves_distinct_same_title() {
         r.mapping[D],
         "Инструкция/Веб Учитель/Домашние задания/Child.md"
     );
-    let text = fs::read_to_string(out.join("Vault").join(&r.mapping[B])).unwrap();
+    let text = fs::read_to_string(out.clone().join(&r.mapping[B])).unwrap();
     let meta: serde_json::Value = serde_json::from_str(
         text.strip_prefix("---\n")
             .unwrap()
@@ -412,7 +472,7 @@ fn no_service_properties_and_membership_is_in_base() {
     let out = t.path().join("out");
     let r = convert(&p, &out).unwrap();
     for target in r.mapping.values() {
-        let text = fs::read_to_string(out.join("Vault").join(target)).unwrap();
+        let text = fs::read_to_string(out.clone().join(target)).unwrap();
         let meta: serde_json::Value = if let Some(rest) = text.strip_prefix("---\n") {
             serde_json::from_str(rest.split("\n---\n").next().unwrap()).unwrap()
         } else {
@@ -427,16 +487,16 @@ fn no_service_properties_and_membership_is_in_base() {
             );
         }
     }
-    assert!(!fs::read_to_string(out.join("Vault").join(&r.mapping[A]))
+    assert!(!fs::read_to_string(out.clone().join(&r.mapping[A]))
         .unwrap()
         .starts_with("---"));
     assert_eq!(
-        fs::read(out.join("Vault/.obsidian/app.json")).unwrap(),
+        fs::read(out.join(".obsidian/app.json")).unwrap(),
         fs::read(out.join(".obsidian/app.json")).unwrap()
     );
     let db = &r.databases[0];
     let base: serde_json::Value = serde_json::from_slice(
-        &fs::read(out.join("Vault").join(db["base"].as_str().unwrap())).unwrap(),
+        &fs::read(out.clone().join(db["base"].as_str().unwrap())).unwrap(),
     )
     .unwrap();
     assert!(base["filters"]["and"][1]
@@ -453,7 +513,7 @@ fn no_service_properties_and_membership_is_in_base() {
         .unwrap()
         .contains(".reduce("));
     let plugin: serde_json::Value = serde_json::from_slice(
-        &fs::read(out.join("Vault/.obsidian/plugins/notion-table-copy/tables.json")).unwrap(),
+        &fs::read(out.join(".obsidian/plugins/notion-table-copy/tables.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(plugin["byRowPath"][&r.mapping[B]]["titleColumn"], "Вопрос");
@@ -465,7 +525,7 @@ fn toc_restores_missing_notion_block_without_touching_code() {
     let p=archive(t.path(),vec![s(format!("Root {A}.md"),"# Root"),s(format!("Root/Article {B}.md"),"# Article\n\nIntro\n\n---\n\n---\n\n## **Первая тема**\n\nText\n\n```\n## Not a heading\n```\n\n## Вторая тема\n\n### Подтема\n")]);
     let out = t.path().join("out");
     let r = convert(&p, &out).unwrap();
-    let text = fs::read_to_string(out.join("Vault").join(&r.mapping[B])).unwrap();
+    let text = fs::read_to_string(out.clone().join(&r.mapping[B])).unwrap();
     assert!(text.contains("**Содержание**"));
     assert!(text.contains("[[#Первая тема|Первая тема]]"));
     assert!(text.contains("[[#Вторая тема#Подтема|Подтема]]"));
@@ -479,7 +539,7 @@ fn callout_icons_become_native_types_and_titles() {
     let p=archive(t.path(),vec![s(format!("Root {A}.md"),"# Root\n\n<aside>\n📚\n\n**Ссылки на инструкции**\n\nText\n</aside>\n\n<aside>\n💡 Совет без потери текста\n</aside>\n\n<aside>\n⚠️\n\nОсторожно\n</aside>\n")]);
     let out = t.path().join("out");
     convert(&p, &out).unwrap();
-    let text = fs::read_to_string(out.join("Vault/Root.md")).unwrap();
+    let text = fs::read_to_string(out.join("Root.md")).unwrap();
     assert!(text.contains("[!info] Ссылки на инструкции"));
     assert!(text.contains("[!tip]"));
     assert!(text.contains("[!warning]"));
@@ -494,10 +554,10 @@ fn database_is_embedded_in_parent_as_full_table_block() {
     let p=archive(t.path(),vec![s(format!("Root {A}.md"),format!("# Root\n\n### Вопрос-ответ\n\n[Questions](DB%20{D}.csv)\n\nОткрыть [таблицу](DB%20{D}.csv) при необходимости.")),s(format!("DB {D}_all.csv"),"Вопрос,Ответ\nQuestion,Whole answer\n"),s(format!("DB/Question {B}.md"),"# Question\n\nОтвет: Whole answer")]);
     let out = t.path().join("out");
     let r = convert(&p, &out).unwrap();
-    let text = fs::read_to_string(out.join("Vault/Root.md")).unwrap();
+    let text = fs::read_to_string(out.join("Root.md")).unwrap();
     assert!(text.contains("![[DB/DB#^notion-table]]"));
     assert!(text.contains("Открыть [[DB/DB|таблицу]] при необходимости."));
-    let table = fs::read_to_string(out.join("Vault/DB/DB.md")).unwrap();
+    let table = fs::read_to_string(out.join("DB/DB.md")).unwrap();
     assert!(table.contains("| Question") || table.contains("Question]]"));
     assert!(table.contains("Whole answer"));
     assert!(table.contains("\n\n^notion-table\n"));

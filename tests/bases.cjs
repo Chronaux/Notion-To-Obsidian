@@ -5,8 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = process.argv[2];
 if (!root) throw new Error('Usage: node tests/bases.cjs RESULT_FOLDER');
-const report = JSON.parse(fs.readFileSync(path.join(root, 'migration-report.json')));
-const vault = path.join(root, 'Vault');
+const report = JSON.parse(fs.readFileSync(path.join(root, '.notion-to-obsidian', 'migration-report.json')));
+const vault = root;
 const expressions = new Map();
 function evaluate(filter, file) {
   if (!filter) return true;

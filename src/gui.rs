@@ -264,7 +264,7 @@ impl App {
             ("BUTTON", "Выбрать папку…", 0x10000, 104),
             (
                 "STATIC",
-                "В результате: Vault и подробный отчёт. Для таблиц включите Bases в Obsidian.",
+                "Папка результата сразу откроется в Obsidian как хранилище. Для таблиц включите Bases.",
                 0,
                 0,
             ),
@@ -274,6 +274,12 @@ impl App {
             ("STATIC", "Выберите ZIP или перетащите его в окно.", 0, 0),
             ("EDIT", "", 0x4 | 0x800 | 0x40 | 0x1000 | 0x200000, 108),
             ("BUTTON", "Открыть результат", 0x10000, 109),
+            (
+                "BUTTON",
+                "Не создавать заглушки отсутствующих страниц Notion (проверено вручную)",
+                0x10000 | 0x3, // BS_AUTOCHECKBOX, disabled by default
+                110,
+            ),
         ];
         for (class, text, style, id) in defs {
             let ex = if class == "EDIT" { 0x200 } else { 0 };
@@ -341,12 +347,13 @@ impl App {
             (m, v(217), editw, v(34)),
             (m + editw + gap, v(217), btn, v(34)),
             (m, v(265), w - 2 * m, v(26)),
-            (m, v(307), v(180), v(37)),
-            (m + v(190), v(307), v(180), v(37)),
-            (m + v(380), v(307), v(140), v(37)),
-            (m, v(359), w - 2 * m, v(28)),
-            (m, v(395), w - 2 * m, (h - v(470)).max(v(90))),
+            (m, v(339), v(180), v(37)),
+            (m + v(190), v(339), v(180), v(37)),
+            (m + v(380), v(339), v(140), v(37)),
+            (m, v(390), w - 2 * m, v(28)),
+            (m, v(426), w - 2 * m, (h - v(500)).max(v(90))),
             (m, h - v(56), w - 2 * m, v(35)),
+            (m, v(297), w - 2 * m, v(30)),
         ];
         for (i, (x, y, w, h)) in rows.iter().enumerate() {
             MoveWindow(self.controls[i], *x, *y, *w, *h, 1);
@@ -361,7 +368,7 @@ impl App {
     }
     unsafe fn set_busy(&mut self, busy: bool) {
         self.busy = busy;
-        for i in [3, 4, 6, 7, 9, 10] {
+        for i in [3, 4, 6, 7, 9, 10, 15] {
             EnableWindow(self.controls[i], (!busy) as i32);
         }
         EnableWindow(self.controls[11], busy as i32);
@@ -372,6 +379,7 @@ impl App {
         }
         let archive = PathBuf::from(get(self.controls[3]).trim());
         let output = PathBuf::from(get(self.controls[6]).trim());
+        let skip_missing = SendMessageW(self.controls[15], 0xf0, 0, 0) != 0; // BM_GETCHECK
         if !archive.is_file() {
             dialog(self.hwnd, "Выберите существующий ZIP-файл.");
             return;
@@ -407,7 +415,7 @@ impl App {
                         let _ = progress.send(Event::Message(s.into()));
                     },
                     stop,
-                );
+                ).skip_missing_pages(skip_missing);
                 if inspect {
                     c.inspect(&archive)
                 } else {
@@ -465,11 +473,12 @@ impl App {
                             }
                             if !inspect {
                                 self.log(&format!(
-                                    "\nВложений: {} · Недостающих страниц: {}",
+                                    "\nВложений: {} · Заглушек: {} · Пропущено страниц: {}",
                                     r.stats.get("attachments").unwrap_or(&0),
-                                    r.stats.get("missing_pages").unwrap_or(&0)
+                                    r.stats.get("missing_pages").unwrap_or(&0),
+                                    r.stats.get("skipped_pages").unwrap_or(&0)
                                 ));
-                                self.log("Откройте папку Vault в Obsidian. Подробности — в migration-report.json.");
+                                self.log("Откройте папку результата в Obsidian. Подробности — в .notion-to-obsidian/migration-report.json.");
                                 EnableWindow(self.controls[14], 1);
                             }
                             self.log(&format!("Предупреждений: {}", r.warnings.len()));

@@ -11,25 +11,26 @@ fn main() {
         }
         #[cfg(not(windows))]
         {
-            eprintln!("Использование: notion-to-obsidian ARCHIVE.zip OUTPUT_FOLDER [--inspect]");
+            eprintln!("Использование: notion-to-obsidian ARCHIVE.zip OUTPUT_FOLDER [--inspect] [--skip-missing]");
             return;
         }
     }
     #[cfg(windows)]
-    if args.len() == 1 && args[0] != "--inspect" {
+    if args.len() == 1 && args[0] != "--inspect" && args[0] != "--skip-missing" {
         gui::launch(Some(std::path::PathBuf::from(&args[0])));
         return;
     }
     let inspect = args.iter().any(|s| s == "--inspect");
+    let skip_missing = args.iter().any(|s| s == "--skip-missing");
     let clean = args
         .iter()
-        .filter(|s| *s != "--inspect")
+        .filter(|s| *s != "--inspect" && *s != "--skip-missing")
         .collect::<Vec<_>>();
     let c = notion_to_obsidian::Converter::new(
         |s| eprintln!("{s}"),
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    );
-    let result = if inspect {
+    ).skip_missing_pages(skip_missing);
+    let result = if inspect && !clean.is_empty() {
         c.inspect(std::path::Path::new(clean[0]))
     } else if clean.len() >= 2 {
         c.run(
