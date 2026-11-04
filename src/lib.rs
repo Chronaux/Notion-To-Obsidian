@@ -2066,8 +2066,18 @@ impl Converter {
                             }
                         }
                     }
-                    if URL.find_iter(s).any(|m| notion(m.as_str())) {
-                        errors.push(format!("Осталась ссылка Notion: {name}"));
+                    // Explicitly skipped Notion pages intentionally stay as
+                    // external links. Every other unresolved Notion URL remains
+                    // a migration error, including links with no recognized ID.
+                    for matched in URL.find_iter(s).filter(|m| notion(m.as_str())) {
+                        let (url_path, _) = split_url(matched.as_str());
+                        let intentionally_skipped = page_ids(&url_path)
+                            .last()
+                            .map(|uid| self.report.skipped_pages.contains_key(uid))
+                            .unwrap_or(false);
+                        if !intentionally_skipped {
+                            errors.push(format!("Осталась ссылка Notion: {name}"));
+                        }
                     }
                     if rx(r"</?(?:aside|details|summary)\b").is_match(s) {
                         errors.push(format!("Осталась разметка Notion: {name}"));
