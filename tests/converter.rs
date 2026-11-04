@@ -258,7 +258,7 @@ fn hidden_columns_and_long_answers() {
         ],
     );
     convert(&p, &t.path().join("out")).unwrap();
-    let text = fs::read_to_string(t.path().join("out/DB/Row.md")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Базы данных/DB/Row.md")).unwrap();
     assert!(text.contains("long\nanswer"));
     assert!(text.contains("hidden"));
 }
@@ -662,7 +662,8 @@ fn database_parent_stays_in_article_tree_while_tables_move_to_database_root() {
     let row = "c".repeat(32);
     assert_eq!(report.mapping[&row], format!("{folder}/Занятие.md"));
     let page = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
-    assert!(page.contains(&format!("![[{table}#^notion-table]]")));
+    let table_link = table.trim_end_matches(".md");
+    assert!(page.contains(&format!("![[{table_link}#^notion-table]]")));
     assert!(page.contains("# Поурочное планирование"));
     assert_eq!(report.audit["passed"], true);
 }
@@ -767,7 +768,7 @@ fn nested_database_subpages_follow_records_and_unrelated_pages_stay_in_instructi
     assert!(article.contains(&format!("![[{folder}/Задания#^notion-table]]")));
     assert!(article.contains(&format!("[[{folder}/Ряд|Ряд]]")));
     let row = fs::read_to_string(out.join(&report.mapping[row_id])).unwrap();
-    assert!(row.contains(&report.mapping[child_id]));
+    assert!(row.contains(report.mapping[child_id].trim_end_matches(".md")));
     let base_path = report.databases[0]["base"].as_str().unwrap();
     let base = fs::read_to_string(out.join(base_path)).unwrap();
     assert!(base.contains(&report.mapping[row_id]));
