@@ -618,3 +618,66 @@ fn database_is_embedded_in_parent_as_full_table_block() {
     assert!(table.contains("\n\n^notion-table\n"));
     assert_eq!(r.stats["databases_embedded_inline"], 1);
 }
+
+
+#[test]
+fn database_page_and_same_named_table_share_one_folder() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Инструкция {A}.md"),
+                format!("# Инструкция\n\n## Веб Учитель\n\n[Поурочное планирование](Инструкция/Поурочное%20планирование%20{B}.md)"),
+            ),
+            s(
+                format!("Инструкция/Поурочное планирование {B}.md"),
+                format!("# Поурочное планирование\n\n[Поурочное планирование](Поурочное%20планирование%20{D}.csv)"),
+            ),
+            s(
+                format!("Инструкция/Поурочное планирование {D}_all.csv"),
+                "Название,Описание\nЗанятие,Содержание\n",
+            ),
+            s(
+                format!("Инструкция/Поурочное планирование/Занятие {}.md", "c".repeat(32)),
+                "# Занятие\n\nОписание: Содержание",
+            ),
+        ],
+    );
+    let out = t.path().join("out");
+    let report = convert(&p, &out).unwrap();
+    let folder = "Инструкция/Веб Учитель/Поурочное планирование";
+    assert_eq!(report.mapping[B], format!("{folder}/Поурочное планирование.md"));
+    assert!(!out.join("Инструкция/Веб Учитель/Поурочное планирование.md").exists());
+    let table = report.databases[0]["readable_table"].as_str().unwrap();
+    assert_eq!(table, format!("{folder}/Поурочное планирование — таблица.md"));
+    assert!(out.join(table).is_file());
+    assert!(out.join(report.databases[0]["base"].as_str().unwrap()).is_file());
+    let page = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
+    assert!(page.contains("Поурочное планирование — таблица"));
+    assert_eq!(report.audit["passed"], true);
+}
+
+#[test]
+fn standalone_page_with_database_is_kept_inside_database_folder() {
+    let t = root();
+    let p = archive(
+        t.path(),
+        vec![
+            s(format!("План {A}.md"), format!("# План\n\n[База](План%20{D}.csv)")),
+            s(format!("План {D}_all.csv"), "Name,Answer\nЗанятие,Текст\n"),
+            s(format!("План/Занятие {B}.md"), "# Занятие\n\nAnswer: Текст"),
+        ],
+    );
+    let out = t.path().join("out");
+    let report = convert(&p, &out).unwrap();
+    assert_eq!(report.mapping[A], "План/План.md");
+    assert!(!out.join("План.md").exists());
+    assert_eq!(
+        report.databases[0]["readable_table"].as_str().unwrap(),
+        "План/План — таблица.md"
+    );
+    assert!(out.join("План/План — таблица.md").exists());
+    assert!(out.join("План/Занятие.md").exists());
+    assert_eq!(report.audit["passed"], true);
+}
