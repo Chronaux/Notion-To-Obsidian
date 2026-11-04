@@ -76,7 +76,15 @@ fn missing_notion_and_block() {
     let r = convert(&p, &t.path().join("out")).unwrap();
     assert_eq!(r.stats["missing_pages"], 1);
     assert!(r.missing_pages.contains_key(D));
-    assert!(r.warnings.iter().any(|w| w.kind == "block_position_lost"));
+    assert!(!r.warnings.iter().any(|w| w.kind == "block_position_lost"));
+    assert_eq!(r.block_link_fallbacks.len(), 1);
+    assert_eq!(r.block_link_fallbacks[0].source, format!("Root {A}.md"));
+    assert_eq!(r.block_link_fallbacks[0].local_target, "Child.md");
+    assert_eq!(r.block_link_fallbacks[0].block_id, "1".repeat(32));
+    assert_eq!(r.stats["block_link_fallbacks"], 1);
+    let text = fs::read_to_string(t.path().join("out/Root.md")).unwrap();
+    assert!(text.contains("[[Child|known]]"));
+    assert_eq!(r.audit["passed"], true);
 }
 #[test]
 fn verified_missing_pages_can_be_skipped_without_broken_wikilinks() {
@@ -832,4 +840,66 @@ fn databases_with_same_title_in_distinct_sections_do_not_merge() {
         assert!(out.join(table).exists());
     }
     assert_ne!(report.databases[0]["readable_table"], report.databases[1]["readable_table"]);
+}
+
+
+#[test]
+fn identical_block_links_are_reported_once_and_keep_the_original_url() {
+    let t = root();
+    let original = format!("https://www.notion.so/{B}#{D}");
+    let p = archive(t.path(), vec![
+        s(format!("Root {A}.md"), format!(
+            "# Root\n\n[First]({original}) and [Second]({original})"
+        )),
+        s(format!("Child {B}.md"), "# Child\n\n## Information\n\nBody kept intact"),
+    ]);
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Root.md")).unwrap();
+    assert!(text.contains("[[Child|First]]"));
+    assert!(text.contains("[[Child|Second]]"));
+    assert_eq!(r.block_link_fallbacks.len(), 1);
+    assert_eq!(r.block_link_fallbacks[0].original_url, original);
+    assert_eq!(r.block_link_fallbacks[0].block_id, D);
+    assert_eq!(r.block_link_fallbacks[0].local_target, "Child.md");
+    assert_eq!(r.stats["block_link_fallbacks"], 1);
+    assert!(r.warnings.iter().all(|w| w.kind != "block_position_lost"));
+    let report: serde_json::Value = serde_json::from_slice(
+        &fs::read(t.path().join("out/.notion-to-obsidian/migration-report.json")).unwrap()
+    ).unwrap();
+    assert_eq!(report["block_link_fallbacks"][0]["original_url"], original);
+    assert_eq!(r.audit["passed"], true);
+}
+
+#[test]
+fn known_notion_heading_fragments_are_converted_to_local_section_links() {
+    let t = root();
+    let p = archive(t.path(), vec![
+        s(format!("Root {A}.md"), format!(
+            "# Root\n\n[Section](https://www.notion.so/{B}#Details)"
+        )),
+        s(format!("Child {B}.md"), "# Child\n\n## Details\n\nContent"),
+    ]);
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    let root = fs::read_to_string(t.path().join("out/Root.md")).unwrap();
+    assert!(root.contains("[[Child#Details|Section]]"));
+    assert_eq!(r.block_link_fallbacks.len(), 0);
+    assert_eq!(r.audit["passed"], true);
+}
+
+#[test]
+fn local_markdown_block_uuid_fallback_keeps_offline_page_target() {
+    let t = root();
+    let p = archive(t.path(), vec![
+        s(format!("Root {A}.md"), format!(
+            "# Root\n\n[Child block](Child%20{B}.md#{D})"
+        )),
+        s(format!("Child {B}.md"), "# Child"),
+    ]);
+    let r = convert(&p, &t.path().join("out")).unwrap();
+    assert_eq!(r.block_link_fallbacks.len(), 1);
+    assert!(r.block_link_fallbacks[0].original_url.contains(".md#"));
+    assert_eq!(r.block_link_fallbacks[0].block_id, D);
+    let root = fs::read_to_string(t.path().join("out/Root.md")).unwrap();
+    assert!(root.contains("[[Child|Child block]]"));
+    assert_eq!(r.audit["passed"], true);
 }
