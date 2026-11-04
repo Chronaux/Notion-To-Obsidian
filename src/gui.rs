@@ -261,7 +261,7 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
     FillRect(dc, &client, app.bg_brush);
     let scale = app.scale;
     let v = |n: i32| (n as f32 * scale) as i32;
-    let header = Rect { left: 0, top: 0, right: client.right, bottom: v(111) };
+    let header = Rect { left: 0, top: 0, right: client.right, bottom: v(105) };
     FillRect(dc, &header, app.header_brush);
     let accent = Rect { left: v(28), top: v(23), right: v(33), bottom: v(67) };
     let accent_brush = CreateSolidBrush(ACCENT);
@@ -270,9 +270,9 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
 
     let m = v(28);
     let gap = v(12);
-    let btn = v(170);
+    let btn = v(146);
     let editw = (client.right - 2 * m - gap - btn).max(v(120));
-    for y in [155, 249] {
+    for y in [153, 242] {
         rounded(
             dc,
             &Rect { left: m, top: v(y), right: m + editw, bottom: v(y + 46) },
@@ -283,15 +283,18 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
         dc,
         &Rect {
             left: m,
-            top: v(496),
+            top: v(456),
             right: client.right - m,
-            bottom: client.bottom - v(75),
+            bottom: client.bottom - if app.open_ready { v(75) } else { v(20) },
         },
         LOG_BG, BORDER, v(14),
     );
 }
 
 unsafe fn draw_button(item: &DrawItem, app: &App) {
+    // Owner-drawn controls are rectangular: clear the corners before
+    // painting a rounded surface, avoiding white Windows artifacts.
+    FillRect(item.dc, &item.rect, app.bg_brush);
     let disabled = item.item_state & 0x4 != 0;
     let down = item.item_state & 0x1 != 0;
     let focused = item.item_state & 0x10 != 0;
@@ -367,6 +370,7 @@ struct App {
     field_brush: H,
     log_brush: H,
     skip_missing: bool,
+    open_ready: bool,
     rx: Option<Receiver<Event>>,
     stop: Arc<AtomicBool>,
     busy: bool,
@@ -415,31 +419,31 @@ impl App {
             ("STATIC", "Notion → Obsidian", 0u32, 0),
             (
                 "STATIC",
-                "Перенос экспорта Notion в готовое хранилище Obsidian · локально и безопасно",
+                "Ваши страницы, таблицы и файлы — в одном хранилище",
                 0,
                 0,
             ),
-            ("STATIC", "Архив Notion · Markdown & CSV", 0, 0),
+            ("STATIC", "Экспорт Notion (.zip)", 0, 0),
             ("EDIT", "", 0x80 | 0x10000, 101),
-            ("BUTTON", "Выбрать ZIP…", 0x10000, 102),
-            ("STATIC", "Новая папка результата", 0, 0),
+            ("BUTTON", "Обзор…", 0x10000, 102),
+            ("STATIC", "Папка для нового хранилища", 0, 0),
             ("EDIT", "", 0x80 | 0x10000, 103),
-            ("BUTTON", "Выбрать папку…", 0x10000, 104),
+            ("BUTTON", "Обзор…", 0x10000, 104),
             (
                 "STATIC",
-                "Папка результата сразу откроется в Obsidian как хранилище. Для таблиц включите Bases.",
+                "Исходные файлы останутся без изменений",
                 0,
                 0,
             ),
-            ("BUTTON", "Проверить архив", 0x10000, 105),
-            ("BUTTON", "Преобразовать", 0x10000 | 1, 106),
+            ("BUTTON", "Проверить ZIP", 0x10000, 105),
+            ("BUTTON", "Создать хранилище", 0x10000 | 1, 106),
             ("BUTTON", "Отменить", 0x10000, 107),
-            ("STATIC", "Выберите ZIP или перетащите его в окно.", 0, 0),
+            ("STATIC", "Выберите ZIP или перетащите его сюда", 0, 0),
             ("EDIT", "", 0x4 | 0x800 | 0x40 | 0x1000 | 0x200000, 108),
-            ("BUTTON", "Открыть результат", 0x10000, 109),
+            ("BUTTON", "Открыть папку", 0x10000, 109),
             (
                 "BUTTON",
-                "Не создавать заглушки отсутствующих страниц Notion (проверено вручную)",
+                "Пропускать отсутствующие страницы",
                 0x10000 | 0xB, // BS_OWNERDRAW; state is held by App
                 110,
             ),
@@ -477,10 +481,11 @@ impl App {
             .map(PathBuf::from)
             .unwrap_or(PathBuf::from("."))
             .join("Documents")
-            .join("Notion_Obsidian_v0.5.1");
+            .join("Notion_Obsidian_v0.5.2");
         set(self.controls[6], &fresh_path(default).to_string_lossy());
         EnableWindow(self.controls[11], 0);
         EnableWindow(self.controls[14], 0);
+        ShowWindow(self.controls[14], 0);
         // Slight insets provide breathing room without adding custom controls.
         for i in [3usize, 6] {
             SendMessageW(self.controls[i], 0x00D3, 3, (10 << 16) | 10); // EM_SETMARGINS
@@ -507,25 +512,27 @@ impl App {
         let v = |n: i32| (n as f32 * s) as i32;
         let m = v(28);
         let gap = v(12);
-        let btn = v(170);
+        let btn = v(146);
         let editw = (w - 2 * m - gap - btn).max(v(120));
+        let log_bottom = h - if self.open_ready { v(85) } else { v(30) };
         let rows = [
-            (m + v(17), v(24), w - 2 * m - v(17), v(44)), // Brand title
-            (m, v(77), w - 2 * m, v(24)),          // Subtitle
-            (m, v(127), w - 2 * m, v(24)),         // ZIP label
-            (m + v(12), v(164), editw - v(24), v(28)),
-            (m + editw + gap, v(155), btn, v(46)),
-            (m, v(221), w - 2 * m, v(24)),         // Output label
-            (m + v(12), v(258), editw - v(24), v(28)),
-            (m + editw + gap, v(249), btn, v(46)),
-            (m, v(312), w - 2 * m, v(24)),         // Hint
-            (m, v(401), v(178), v(44)),
-            (m + v(190), v(401), v(178), v(44)),
-            (m + v(380), v(401), v(132), v(44)),
-            (m, v(467), w - 2 * m, v(24)),         // Status
-            (m + v(10), v(506), w - 2 * m - v(20), (h - v(592)).max(v(68))),
+            (m + v(17), v(20), w - 2 * m - v(17), v(44)), // Title
+            (m, v(72), w - 2 * m, v(24)),          // Subtitle
+            (m, v(120), w - 2 * m, v(24)),         // ZIP label
+            (m + v(12), v(162), editw - v(24), v(28)),
+            (m + editw + gap, v(153), btn, v(46)),
+            (m, v(209), w - 2 * m, v(24)),         // Output label
+            (m + v(12), v(251), editw - v(24), v(28)),
+            (m + editw + gap, v(242), btn, v(46)),
+            (m, v(296), w - 2 * m, v(22)),         // Hint
+            (m, v(359), v(184), v(44)),
+            (m + v(196), v(359), v(224), v(44)),
+            (m + v(432), v(359), v(132), v(44)),
+            (m, v(422), w - 2 * m, v(24)),         // Status
+            (m + v(10), v(467), w - 2 * m - v(20),
+                (log_bottom - v(467)).max(v(44))),
             (m, h - v(62), w - 2 * m, v(42)),      // Open result
-            (m, v(351), w - 2 * m, v(36)),        // Manual skip
+            (m, v(318), w - 2 * m, v(35)),        // Optional skip
         ];
         for (i, (x, y, width, height)) in rows.iter().enumerate() {
             MoveWindow(self.controls[i], *x, *y, *width, *height, 1);
@@ -564,13 +571,16 @@ impl App {
             );
             return;
         }
+        self.open_ready = false;
+        ShowWindow(self.controls[14], 0);
+        self.layout();
         set(self.controls[13], "");
         set(
             self.controls[12],
             if inspect {
-                "Проверка архива…"
+                "Проверяем ZIP…"
             } else {
-                "Преобразование…"
+                "Создаём хранилище…"
             },
         );
         EnableWindow(self.controls[14], 0);
@@ -608,8 +618,23 @@ impl App {
         for event in events {
             match event {
                 Event::Message(s) => {
-                    set(self.controls[12], &s);
-                    self.log(&s)
+                    // Keep internal paths and long diagnostics out of the UI.
+                    let message = if s.starts_with("Чтение ZIP") {
+                        "Читаем архив…"
+                    } else if s.starts_with("Сопоставление CSV") {
+                        "Находим записи и таблицы…"
+                    } else if s.starts_with("Преобразование страниц") {
+                        "Переносим страницы…"
+                    } else if s.starts_with("Проверка ссылок") {
+                        "Проверяем ссылки и файлы…"
+                    } else if s.starts_with("Готово.") {
+                        "Завершаем перенос…"
+                    } else {
+                        ""
+                    };
+                    if !message.is_empty() {
+                        set(self.controls[12], message);
+                    }
                 }
                 Event::Done(result, inspect) => {
                     self.set_busy(false);
@@ -624,45 +649,35 @@ impl App {
                                     "Готово — хранилище создано"
                                 },
                             );
+                            set(self.controls[13], "");
                             self.log(&format!(
-                                "\nСтраниц: {} · Баз: {} · Записей: {}",
+                                "Страниц: {}   ·   Баз: {}   ·   Записей: {}",
                                 r.stats.get("source_pages").unwrap_or(&0),
                                 r.stats.get("source_databases").unwrap_or(&0),
                                 r.stats.get("source_rows").unwrap_or(&0)
                             ));
-                            let matched = r
-                                .row_matching
-                                .iter()
-                                .filter_map(|x| x["matched"].as_u64())
-                                .sum::<u64>();
-                            self.log(&format!("Сопоставлено записей с Markdown: {matched}"));
-                            for d in &r.databases {
-                                self.log(&format!(
-                                    "  {}: {} записей, в текущем виде {}",
-                                    d["title"].as_str().unwrap_or(""),
-                                    d["rows"],
-                                    d["view_rows"]
-                                ));
-                            }
                             if !inspect {
                                 self.log(&format!(
-                                    "\nВложений: {} · Заглушек: {} · Пропущено страниц: {}",
+                                    "Вложений: {}   ·   Пропущено страниц: {}",
                                     r.stats.get("attachments").unwrap_or(&0),
-                                    r.stats.get("missing_pages").unwrap_or(&0),
                                     r.stats.get("skipped_pages").unwrap_or(&0)
                                 ));
-                                self.log("Откройте папку результата в Obsidian. Подробности — в .notion-to-obsidian/migration-report.json.");
+                                self.log("Готово. Теперь можно открыть хранилище в Obsidian.");
+                                self.open_ready = true;
+                                ShowWindow(self.controls[14], 1);
                                 EnableWindow(self.controls[14], 1);
+                                self.layout();
+                            } else {
+                                self.log("Архив подходит для преобразования.");
                             }
-                            self.log(&format!("Предупреждений: {}", r.warnings.len()));
-                            for w in r.warnings.iter().take(10) {
-                                self.log(&format!("  {}: {}", w.kind, w.detail));
+                            if !r.warnings.is_empty() {
+                                self.log(&format!("Предупреждений: {}. Подробности в отчёте.", r.warnings.len()));
                             }
                         }
                         Err(e) => {
                             set(
                                 self.controls[12],
-                                "Операция завершена с ошибкой или отменена",
+                                "Не удалось завершить перенос",
                             );
                             self.log(&e);
                         }
@@ -709,7 +724,7 @@ impl App {
                 let end = buf.iter().position(|&x| x == 0).unwrap();
                 let path = fresh_path(
                     PathBuf::from(String::from_utf16_lossy(&buf[..end]))
-                        .join("Notion_Obsidian_v0.5.1"),
+                        .join("Notion_Obsidian_v0.5.2"),
                 );
                 set(self.controls[6], &path.to_string_lossy());
             }
@@ -795,7 +810,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         0x24 => {
             let points = l as *mut Point;
             (*points.add(3)).x = (760.0 * app.scale) as i32;
-            (*points.add(3)).y = (660.0 * app.scale) as i32;
+            (*points.add(3)).y = (670.0 * app.scale) as i32;
             0
         }
         5 => {
@@ -813,7 +828,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                 107 => {
                     app.stop.store(true, Ordering::Relaxed);
                     EnableWindow(app.controls[11], 0);
-                    set(app.controls[12], "Отмена…");
+                    set(app.controls[12], "Отменяем…");
                 }
                 110 if !app.busy => {
                     app.skip_missing = !app.skip_missing;
@@ -905,6 +920,7 @@ pub fn launch(archive: Option<PathBuf>) {
             field_brush: 0,
             log_brush: 0,
             skip_missing: false,
+            open_ready: false,
             rx: None,
             stop: Arc::new(AtomicBool::new(false)),
             busy: false,
@@ -913,13 +929,13 @@ pub fn launch(archive: Option<PathBuf>) {
         });
         let ptr = Box::into_raw(app);
         let width = (940.0 * scale) as i32;
-        let height = (770.0 * scale) as i32;
+        let height = (710.0 * scale) as i32;
         let x = ((GetSystemMetrics(0) - width) / 2).max(0);
         let y = ((GetSystemMetrics(1) - height) / 2).max(0);
         let hwnd = CreateWindowExW(
             0,
             name.as_ptr(),
-            wide("Notion → Obsidian · 0.5.1").as_ptr(),
+            wide("Notion → Obsidian · 0.5.2").as_ptr(),
             0x00cf0000,
             x,
             y,
