@@ -525,6 +525,19 @@ struct Database {
     keys: BTreeMap<String, String>,
     pages: Vec<usize>,
 }
+// The original page and its database are often exported beside the same
+// directory. Keep the page inside that directory with the database records.
+fn database_directory_for_page(page: &Page, dbs: &[Database]) -> Option<String> {
+    let stem = basename(&page.source).strip_suffix(".md")?;
+    let name = rx(r"\s+[a-fA-F0-9]{32}$").replace(stem, "");
+    let plain = join(parent(&page.source), &name);
+    let suffixed = format!("{} {}-{}", plain, &page.uid[..4], &page.uid[28..]);
+    [suffixed, plain].into_iter().find(|folder| {
+        dbs.iter().any(|db| {
+            db.folder == *folder || db.folder.starts_with(&(folder.clone() + "/"))
+        })
+    })
+}
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Warning {
     pub kind: String,
@@ -578,7 +591,7 @@ impl Converter {
             section_nodes: BTreeMap::new(),
             skip_missing_pages: false,
             report: Report {
-                version: "0.5.1".into(),
+                version: "0.5.2".into(),
                 ..Default::default()
             },
             cancel,
@@ -1112,11 +1125,36 @@ impl Converter {
             dirs.insert(src.into(), target.clone());
             target
         }
+        // Colocate a parent note with its exported database, while retaining
+        // the section path already reconstructed from the root page.
+        let mut page_folders = page_folders;
+        for page in &self.pages {
+            if let Some(source_dir) = database_directory_for_page(page, &self.dbs) {
+                let destination = directory(&source_dir, &mut dirs, &mut used_dirs);
+                let belongs_to_section = page_folders.get(&page.source).map_or(true, |section| {
+                    destination == *section || destination.starts_with(&(section.clone() + "/"))
+                });
+                if belongs_to_section {
+                    page_folders.insert(page.source.clone(), destination);
+                }
+            }
+        }
         for di in 0..self.dbs.len() {
             let db = self.dbs[di].clone();
             let folder = directory(&db.folder, &mut dirs, &mut used_dirs);
+            // Prefer the article's original name when it matches a CSV title.
+            let same_named_article = self.pages.iter().any(|page| {
+                page.db.is_empty()
+                    && page_folders.get(&page.source) == Some(&folder)
+                    && safe_name(&page.title).eq_ignore_ascii_case(&safe_name(&db.title))
+            });
+            let table_title = if same_named_article {
+                format!("{} — таблица", safe_name(&db.title))
+            } else {
+                safe_name(&db.title)
+            };
             let target = self.reserve(
-                join(&folder, &format!("{}.md", safe_name(&db.title))),
+                join(&folder, &format!("{table_title}.md")),
                 &db.uid,
             );
             let base = self.reserve(
@@ -1957,7 +1995,7 @@ impl Converter {
             .insert("missing_pages".into(), self.report.missing_pages.len());
         self.report.stats.insert("skipped_pages".into(), self.report.skipped_pages.len());
         self.report.stats.insert("bases".into(), self.dbs.len());
-        let home=format!("# Инструкция — экспорт v0.5.1\n\nОткройте эту папку как хранилище. Основной вид — таблицы с полным текстом; для фильтрации доступны **Bases / Базы**.\n\n## Главная страница\n\n{}\n\n## Базы\n\n{}\n\n## Как пользоваться\n\n- Поиск по содержимому: Ctrl+Shift+F.\n- Переход к заметке: Ctrl+O.\n- Полные ответы видны на страницах таблиц и в отдельных заметках.\n- Копирование одним кликом: Настройки → Сторонние плагины → включите Notion Full Tables. Плагин уже находится в этом хранилище; скачивать его не нужно.\n- В Bases после включения плагина доступен вид «Полный текст · копировать».\n- Теги сохранены в стандартном свойстве tags. Пробелы в тегах заменены подчёркиваниями.\n- Экспортированный вид — снимок состава строк.\n- Недостающие страницы обозначены заглушками, если не включён ручной пропуск.\n- Повторный запуск создаёт отдельное хранилище, без слияния локальных правок.\n",self.pages.iter().filter(|p|!p.source.contains('/')).map(|p|format!("- {}",Self::wiki(&p.target,&p.title,false,false,""))).collect::<Vec<_>>().join("\n"),self.dbs.iter().map(|d|format!("- {}",Self::wiki(&d.target,&d.title,false,false,""))).collect::<Vec<_>>().join("\n"));
+        let home=format!("# Инструкция — экспорт v0.5.2\n\nОткройте эту папку как хранилище. Основной вид — таблицы с полным текстом; для фильтрации доступны **Bases / Базы**.\n\n## Главная страница\n\n{}\n\n## Базы\n\n{}\n\n## Как пользоваться\n\n- Поиск по содержимому: Ctrl+Shift+F.\n- Переход к заметке: Ctrl+O.\n- Полные ответы видны на страницах таблиц и в отдельных заметках.\n- Копирование одним кликом: Настройки → Сторонние плагины → включите Notion Full Tables. Плагин уже находится в этом хранилище; скачивать его не нужно.\n- В Bases после включения плагина доступен вид «Полный текст · копировать».\n- Теги сохранены в стандартном свойстве tags. Пробелы в тегах заменены подчёркиваниями.\n- Экспортированный вид — снимок состава строк.\n- Недостающие страницы обозначены заглушками, если не включён ручной пропуск.\n- Повторный запуск создаёт отдельное хранилище, без слияния локальных правок.\n",self.pages.iter().filter(|p|!p.source.contains('/')).map(|p|format!("- {}",Self::wiki(&p.target,&p.title,false,false,""))).collect::<Vec<_>>().join("\n"),self.dbs.iter().map(|d|format!("- {}",Self::wiki(&d.target,&d.title,false,false,""))).collect::<Vec<_>>().join("\n"));
         self.output
             .insert("Начать здесь.md".into(), home.into_bytes());
         Ok(())
@@ -2192,7 +2230,7 @@ impl Converter {
             pretty(&self.report),
         )
         .map_err(|e| e.to_string())?;
-        let state = json!({"version":"0.5.1","archive_sha256":hash(fs::read(archive).map_err(|e|e.to_string())?),"pages":self.pages.iter().map(|p|(p.uid.clone(),json!({"path":p.target,"source_sha256":hash(&p.text),"output_sha256":hash(&self.output[&p.target]),"database_id":p.db,"row_order":p.order,"view_order":p.view_order}))).collect::<BTreeMap<_,_>>()});
+        let state = json!({"version":"0.5.2","archive_sha256":hash(fs::read(archive).map_err(|e|e.to_string())?),"pages":self.pages.iter().map(|p|(p.uid.clone(),json!({"path":p.target,"source_sha256":hash(&p.text),"output_sha256":hash(&self.output[&p.target]),"database_id":p.db,"row_order":p.order,"view_order":p.view_order}))).collect::<BTreeMap<_,_>>()});
         fs::write(stage.path().join(".notion-to-obsidian/import-state.json"), pretty(&state))
             .map_err(|e| e.to_string())?;
         fs::write(stage.path().join(".notion-to-obsidian/Открыть.txt"),"В Obsidian откройте папку результата как хранилище. Включите встроенный модуль Bases. Начните с заметки «Начать здесь».\n").map_err(|e|e.to_string())?;
