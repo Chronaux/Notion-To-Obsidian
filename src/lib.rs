@@ -1081,9 +1081,12 @@ impl Converter {
                 let exact = join(&physical, &raw);
                 let suffix = format!("{} {}-{}", exact, &page.uid[..4], &page.uid[28..]);
                 let has_children_reference = decode(&page.text).contains(&(raw.clone() + "/"));
-                let own = if all_dirs.contains(&suffix) {
+                let own = if all_dirs.contains(&suffix)
+                    || self.dbs.iter().any(|db| db.folder == suffix)
+                {
                     Some(suffix)
-                } else if all_dirs.contains(&exact)
+                } else if (all_dirs.contains(&exact)
+                    || self.dbs.iter().any(|db| db.folder == exact))
                     && (duplicate_names[&raw] == 1 || has_children_reference)
                     && !claimed_owners.contains(&exact)
                 {
