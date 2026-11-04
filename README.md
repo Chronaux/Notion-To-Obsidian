@@ -2,7 +2,7 @@
 
 Переносимое приложение на **Rust** для преобразования ZIP-экспорта Notion в готовое хранилище Obsidian: страницы, вложения, внутренние ссылки, Properties, теги и базы данных.
 
-**Windows 10/11 · x64 · v0.5.5 · нативный Win32 · полностью локально**
+**Windows 10/11 · x64 · v0.5.6 · нативный Win32 · полностью локально**
 
 ## Скачать готовую Windows-версию
 
@@ -10,9 +10,11 @@
 
 [Все выпуски](https://github.com/Chronaux/Notion-To-Obsidian/releases) · [Статус автоматической сборки](https://github.com/Chronaux/Notion-To-Obsidian/actions/workflows/windows-release.yml) · [История изменений](CHANGELOG.md) · [Инструкция](docs/USAGE.md)
 
-Если новая сборка ещё не опубликована, можно использовать [версию v0.5.4](https://github.com/Chronaux/Notion-To-Obsidian/releases/download/v0.5.4/NotionToObsidian_Windows_x64.zip).
+Если новый выпуск ещё не опубликован, можно использовать [проверенную версию v0.5.5](https://github.com/Chronaux/Notion-To-Obsidian/releases/download/v0.5.5/NotionToObsidian_Windows_x64.zip).
 
-Распакуйте ZIP из Releases, запустите `NotionToObsidian_v0.5.5.exe` (имя содержит номер соответствующего выпуска). **Установка Rust, Python, .NET, Electron или WebView2 не требуется.** Приложение полностью локальное, Windows 10/11 x64.
+В **GitHub Releases** лежит один готовый ZIP, содержащий EXE и документацию. ZIP, который GitHub автоматически создаёт при скачивании **Actions → Artifacts → windows-x64-release**, теперь содержит те же файлы **напрямую, без вложенного ZIP**.
+
+Распакуйте ZIP из Releases, запустите `NotionToObsidian_v0.5.6.exe` (имя содержит номер соответствующего выпуска). **Установка Rust, Python, .NET, Electron или WebView2 не требуется.** Приложение полностью локальное, Windows 10/11 x64.
 
 ## Что переносится
 
@@ -103,6 +105,6 @@ node tests/ui.cjs  # статическая проверка иконки и т�
 
 В v0.4.0 прошли 23 Rust-теста и DOM-проверки плагина. На контрольном экспорте проверены 535 страниц, 388 записей CSV, 32 базы, 274 вложения и 280 блоков кода. Фильтры всех баз проверены при трёх вариантах корневого пути. [Отчёт о проверке](VALIDATION_v0.4.0.json).
 
-Фактический статус сборки v0.5.5 смотрите в [GitHub Actions](https://github.com/Chronaux/Notion-To-Obsidian/actions/workflows/windows-release.yml). Предыдущие результаты v0.4.0 не заменяют проверку v0.5.5; бинарный архив публикуется только после автоматических тестов.
+Фактический статус сборки v0.5.6 смотрите в [GitHub Actions](https://github.com/Chronaux/Notion-To-Obsidian/actions/workflows/windows-release.yml). Предыдущие результаты v0.4.0 не заменяют проверку v0.5.6; бинарный архив публикуется только после автоматических тестов.
 
 Лицензионные уведомления сторонних компонентов: [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) и [licenses/](licenses/).

@@ -590,7 +590,7 @@ impl Converter {
             section_nodes: BTreeMap::new(),
             skip_missing_pages: false,
             report: Report {
-                version: "0.5.5".into(),
+                version: "0.5.6".into(),
                 ..Default::default()
             },
             cancel,
@@ -2273,7 +2273,7 @@ impl Converter {
             pretty(&self.report),
         )
         .map_err(|e| e.to_string())?;
-        let state = json!({"version":"0.5.5","archive_sha256":hash(fs::read(archive).map_err(|e|e.to_string())?),"pages":self.pages.iter().map(|p|(p.uid.clone(),json!({"path":p.target,"source_sha256":hash(&p.text),"output_sha256":hash(&self.output[&p.target]),"database_id":p.db,"row_order":p.order,"view_order":p.view_order}))).collect::<BTreeMap<_,_>>()});
+        let state = json!({"version":"0.5.6","archive_sha256":hash(fs::read(archive).map_err(|e|e.to_string())?),"pages":self.pages.iter().map(|p|(p.uid.clone(),json!({"path":p.target,"source_sha256":hash(&p.text),"output_sha256":hash(&self.output[&p.target]),"database_id":p.db,"row_order":p.order,"view_order":p.view_order}))).collect::<BTreeMap<_,_>>()});
         fs::write(stage.path().join(".notion-to-obsidian/import-state.json"), pretty(&state))
             .map_err(|e| e.to_string())?;
         fs::write(stage.path().join(".notion-to-obsidian/Открыть.txt"),"В Obsidian откройте папку результата как хранилище. Включите встроенный модуль Bases. Начните с заметки «Начать здесь».\n").map_err(|e|e.to_string())?;

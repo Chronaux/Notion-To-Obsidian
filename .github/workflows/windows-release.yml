@@ -55,13 +55,11 @@ jobs:
         run: cargo build --release --locked --target x86_64-pc-windows-gnu
       - name: Package executable, documentation and checksums
         run: python3 scripts/package_release.py
-      - name: Upload verified build to Windows smoke tests
+      - name: Upload unpacked Windows executable and documentation
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64-release
-          path: |
-            dist/NotionToObsidian_Windows_x64.zip
-            dist/SHA256SUMS.txt
+          path: dist/bundle/
           if-no-files-found: error
           retention-days: 14
 
@@ -75,18 +73,18 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: windows-x64-release
-          path: dist
+          path: extracted
       - name: Verify and run actual Windows EXE
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
-          $checksum = (Get-Content dist/SHA256SUMS.txt).Split(' ')[0]
-          $actual = (Get-FileHash dist/NotionToObsidian_Windows_x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($checksum -ne $actual) { throw "ZIP checksum mismatch" }
-          Expand-Archive dist/NotionToObsidian_Windows_x64.zip extracted
           $exe = Join-Path (Resolve-Path extracted).Path "NotionToObsidian_v$version.exe"
           if (!(Test-Path $exe)) { throw "Windows executable is missing" }
+          $checksum = ((Get-Content extracted/SHA256SUMS.txt) -split '\s+')[0]
+          $actual = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($checksum -ne $actual) { throw "EXE checksum mismatch" }
+          if (Get-ChildItem extracted -Filter '*.zip' -File) { throw "Nested ZIP in artifact" }
           $fixture_script = @'
           from zipfile import ZipFile
           a = "a" * 32
@@ -128,7 +126,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: windows-x64-release
-          path: dist
+          path: dist/bundle
+      - name: Repackage verified executable for GitHub Releases
+        run: python3 scripts/package_release.py --repack
       - name: Publish verified versioned release
         env:
           GH_TOKEN: ${{ github.token }}

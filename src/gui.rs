@@ -35,6 +35,14 @@ struct Paint {
     inc_update: i32,
     reserved: [u8; 32],
 }
+// TRACKMOUSEEVENT, used by native Win32 folder buttons (x64 alignment).
+#[repr(C)]
+struct TrackMouse {
+    size: u32,
+    flags: u32,
+    hwnd: H,
+    hover_time: u32,
+}
 // DRAWITEMSTRUCT on Win64. Used by BS_OWNERDRAW for native dark buttons.
 #[repr(C)]
 struct DrawItem {
@@ -146,6 +154,11 @@ extern "system" {
     fn PostQuitMessage(code: i32);
     fn GetWindowLongPtrW(hwnd: H, index: i32) -> isize;
     fn SetWindowLongPtrW(hwnd: H, index: i32, value: isize) -> isize;
+    fn CallWindowProcW(proc: isize, hwnd: H, msg: u32, w: usize, l: isize) -> isize;
+    fn GetParent(hwnd: H) -> H;
+    fn TrackMouseEvent(event: *mut TrackMouse) -> i32;
+    fn SetCursor(cursor: H) -> H;
+    fn SetFocus(hwnd: H) -> H;
     fn SendMessageW(hwnd: H, msg: u32, w: usize, l: isize) -> isize;
     fn SetWindowTextW(hwnd: H, text: *const u16) -> i32;
     fn GetWindowTextLengthW(hwnd: H) -> i32;
@@ -326,12 +339,33 @@ unsafe fn draw_button(item: &DrawItem, app: &App) {
     let foreground = if disabled { rgb(114, 111, 121) } else { TEXT };
 
     if browse {
+        let hovered = app.hover_browse == Some(if id == 102 { 0 } else { 1 });
         let x = (item.rect.left + item.rect.right) / 2;
         let y = (item.rect.top + item.rect.bottom) / 2;
         let z = app.scale;
         let p = |n: i32| (n as f32 * z).round() as i32;
-        let pen = CreatePen(0, p(2).max(1),
-            if disabled { rgb(113, 110, 122) } else if down { TEXT } else { MUTED });
+        // Draw hover/focus surface FIRST: drawing it after the icon erased the icon.
+        let fill = if disabled { FIELD } else if down {
+            rgb(65, 58, 91)
+        } else if hovered {
+            rgb(55, 50, 73)
+        } else {
+            FIELD
+        };
+        let outline = if disabled { FIELD } else if focused {
+            ACCENT
+        } else if hovered {
+            rgb(90, 78, 144)
+        } else {
+            FIELD
+        };
+        rounded(item.dc, &item.rect, fill, outline, p(10));
+        let color = if disabled { rgb(113, 110, 122) } else if hovered || down {
+            TEXT
+        } else {
+            MUTED
+        };
+        let pen = CreatePen(0, p(2).max(1), color);
         let previous = SelectObject(item.dc, pen);
         MoveToEx(item.dc, x - p(9), y - p(3), null_mut());
         LineTo(item.dc, x - p(9), y - p(6));
@@ -343,9 +377,6 @@ unsafe fn draw_button(item: &DrawItem, app: &App) {
         LineTo(item.dc, x - p(9), y - p(3));
         SelectObject(item.dc, previous);
         DeleteObject(pen);
-        if focused {
-            rounded(item.dc, &item.rect, FIELD, ACCENT, p(10));
-        }
         return;
     }
 
@@ -421,6 +452,8 @@ struct App {
     titlefont: H,
     bg_brush: H,
     field_brush: H,
+    browse_procs: [isize; 2],
+    hover_browse: Option<usize>,
     skip_missing: bool,
     open_ready: bool,
     rx: Option<Receiver<Event>>,
@@ -481,14 +514,19 @@ impl App {
         }
         let default = std::env::var_os("USERPROFILE")
             .map(PathBuf::from).unwrap_or(PathBuf::from("."))
-            .join("Documents").join("Notion_Obsidian_v0.5.5");
+            .join("Documents").join("Notion_Obsidian_v0.5.6");
         set(self.controls[6], &fresh_path(default).to_string_lossy());
         ShowWindow(self.controls[8], 0);
         ShowWindow(self.controls[11], 0);
         ShowWindow(self.controls[14], 0);
         for i in [3usize, 6] {
-            SendMessageW(self.controls[i], 0x00D3, 3, (12 << 16) | 12);
+            SendMessageW(self.controls[i], 0x00D3, 3, (14 << 16) | 14);
             SetWindowTheme(self.controls[i], wide("DarkMode_Explorer").as_ptr(), null());
+        }
+        // Browse controls have native hover tracking and a pointing-hand cursor.
+        for (slot, index) in [4usize, 7].iter().enumerate() {
+            self.browse_procs[slot] =
+                SetWindowLongPtrW(self.controls[*index], -4, browse_proc as isize);
         }
         DragAcceptFiles(self.hwnd, 1);
         SetTimer(self.hwnd, 1, 33, 0);
@@ -510,10 +548,10 @@ impl App {
             (m, v(14), roww * 60 / 100, v(28)),  // App title
             (w - m - v(245), v(17), v(245), v(24)), // Privacy note
             (m, v(75), roww, v(22)),             // ZIP label
-            (m + v(8), v(112), input_w, v(24)),  // ZIP edit
+            (m + v(12), v(105), input_w - v(4), v(40)), // ZIP: full-height edit for vertical centering
             (w - m - v(47), v(110), v(38), v(30)), // ZIP chooser
             (m, v(154), roww, v(22)),             // Output label
-            (m + v(8), v(192), input_w, v(24)),  // Output edit
+            (m + v(12), v(185), input_w - v(4), v(40)), // Output: full-height edit
             (w - m - v(47), v(190), v(38), v(30)), // Output chooser
             (0, 0, 0, 0),                         // unused
             (m, v(281), check_w, v(49)),         // Secondary action
@@ -532,8 +570,25 @@ impl App {
         InvalidateRect(self.hwnd, null(), 0);
     }
 
+    unsafe fn invalidate_progress(&self) {
+        let mut client = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+        GetClientRect(self.hwnd, &mut client);
+        let v = |n: i32| (n as f32 * self.scale).round() as i32;
+        let track = Rect {
+            left: v(10), top: client.bottom - v(23),
+            right: client.right - v(10), bottom: client.bottom - v(10),
+        };
+        // Only redraw the progress strip: painting the whole window on every
+        // animation tick used to cover child controls and cause visible flashes.
+        InvalidateRect(self.hwnd, &track, 0);
+    }
+
     unsafe fn set_busy(&mut self, busy: bool) {
         self.busy = busy;
+        self.hover_browse = None;
+        for i in [4usize, 7] {
+            InvalidateRect(self.controls[i], null(), 0);
+        }
         for i in [3, 4, 6, 7, 9, 15] {
             EnableWindow(self.controls[i], (!busy) as i32);
         }
@@ -695,7 +750,7 @@ impl App {
             if (self.progress_target - self.progress_display).abs() < 0.002 {
                 self.progress_display = self.progress_target;
             }
-            InvalidateRect(self.hwnd, null(), 0);
+            self.invalidate_progress();
         }
     }
 
@@ -716,6 +771,7 @@ impl App {
             let end = file.iter().position(|&x| x == 0).unwrap();
             set(self.controls[3], &String::from_utf16_lossy(&file[..end]));
         }
+        SetFocus(self.hwnd);
     }
     unsafe fn choose_output(&self) {
         let mut display = vec![0u16; 260];
@@ -737,12 +793,13 @@ impl App {
                 let end = buf.iter().position(|&x| x == 0).unwrap();
                 let path = fresh_path(
                     PathBuf::from(String::from_utf16_lossy(&buf[..end]))
-                        .join("Notion_Obsidian_v0.5.4"),
+                        .join("Notion_Obsidian_v0.5.6"),
                 );
                 set(self.controls[6], &path.to_string_lossy());
             }
             CoTaskMemFree(pidl);
         }
+        SetFocus(self.hwnd);
     }
 }
 fn fresh_path(path: PathBuf) -> PathBuf {
@@ -759,6 +816,46 @@ fn fresh_path(path: PathBuf) -> PathBuf {
     }
     unreachable!()
 }
+// Subclass only the two folder buttons, keeping every other control native.
+unsafe extern "system" fn browse_proc(hwnd: H, msg: u32, w: usize, l: isize) -> isize {
+    let parent = GetParent(hwnd);
+    let ptr = GetWindowLongPtrW(parent, -21) as *mut App;
+    if ptr.is_null() { return DefWindowProcW(hwnd, msg, w, l); }
+    let app = &mut *ptr;
+    let slot = if hwnd == app.controls[4] { 0 }
+        else if hwnd == app.controls[7] { 1 }
+        else { return DefWindowProcW(hwnd, msg, w, l); };
+    match msg {
+        0x0200 if !app.busy => { // WM_MOUSEMOVE
+            if app.hover_browse != Some(slot) {
+                app.hover_browse = Some(slot);
+                let mut track = TrackMouse {
+                    size: std::mem::size_of::<TrackMouse>() as u32,
+                    flags: 0x2, // TME_LEAVE
+                    hwnd,
+                    hover_time: 0,
+                };
+                TrackMouseEvent(&mut track);
+                InvalidateRect(hwnd, null(), 0);
+            }
+        }
+        0x02A3 => { // WM_MOUSELEAVE
+            if app.hover_browse == Some(slot) {
+                app.hover_browse = None;
+                InvalidateRect(hwnd, null(), 0);
+            }
+        }
+        0x0020 if !app.busy => { // WM_SETCURSOR
+            SetCursor(LoadCursorW(0, 32649usize as *const u16)); // IDC_HAND
+            return 1;
+        }
+        _ => {}
+    }
+    let previous = app.browse_procs[slot];
+    if previous == 0 { DefWindowProcW(hwnd, msg, w, l) }
+    else { CallWindowProcW(previous, hwnd, msg, w, l) }
+}
+
 unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> isize {
     if msg == 1 {
         let ptr = *(l as *const *mut App);
@@ -922,6 +1019,8 @@ pub fn launch(archive: Option<PathBuf>) {
             titlefont: 0,
             bg_brush: 0,
             field_brush: 0,
+            browse_procs: [0; 2],
+            hover_browse: None,
             skip_missing: true,
             open_ready: false,
             rx: None,
@@ -944,7 +1043,7 @@ pub fn launch(archive: Option<PathBuf>) {
             0,
             name.as_ptr(),
             wide("Notion → Obsidian").as_ptr(),
-            0x00cf0000,
+            0x00cf0000 | 0x02000000, // WS_CLIPCHILDREN: do not paint over controls
             x,
             y,
             width,
