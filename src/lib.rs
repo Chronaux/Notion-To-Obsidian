@@ -1155,7 +1155,7 @@ impl Converter {
             let same_named_article = self.pages.iter().any(|page| {
                 page.db.is_empty()
                     && page_folders.get(&page.source) == Some(&folder)
-                    && safe_name(&page.title).eq_ignore_ascii_case(&safe_name(&db.title))
+                    && safe_name(&page.title).to_lowercase() == safe_name(&db.title).to_lowercase()
             });
             let table_title = if same_named_article {
                 format!("{} — таблица", safe_name(&db.title))
