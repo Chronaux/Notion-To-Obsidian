@@ -552,6 +552,7 @@ pub struct Report {
     pub version: String,
     pub stats: BTreeMap<String, usize>,
     pub warnings: Vec<Warning>,
+    #[serde(default)]
     pub block_link_fallbacks: Vec<BlockLinkFallback>,
     pub missing_pages: BTreeMap<String, Missing>,
     pub skipped_pages: BTreeMap<String, Missing>,
