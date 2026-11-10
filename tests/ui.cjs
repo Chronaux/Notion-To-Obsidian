@@ -11,15 +11,20 @@ const gui = fs.readFileSync('src/gui.rs', 'utf8');
 const workflow = fs.readFileSync('.github/workflows/windows-release.yml', 'utf8');
 const packaging = fs.readFileSync('scripts/package_release.py', 'utf8');
 const core = fs.readFileSync('src/lib.rs', 'utf8');
-const version = '0.5.7';
-assert.match(cargo, /version = "0\.5\.6"/);
-assert.match(lock, /name = "notion-to-obsidian"\s+version = "0\.5\.6"/);
-assert.match(rc, /FILEVERSION 0,5,6,0/);
-assert.match(rc, /PRODUCTVERSION 0,5,6,0/);
+// Derive the release version from Cargo.toml so metadata checks never
+// accidentally pin the previous release when Cargo's version is bumped.
+const version = cargo.match(/^version = "(\d+\.\d+\.\d+)"$/m)?.[1];
+assert.ok(version, 'Cargo.toml must contain a semantic version');
+const versionPattern = version.replaceAll('.', '\\.');
+const rcVersion = version.replaceAll('.', ',') + ',0';
+assert.match(lock, new RegExp('name = "notion-to-obsidian"\\s+version = "' + versionPattern + '"'));
+assert.match(rc, new RegExp('FILEVERSION ' + rcVersion));
+assert.match(rc, new RegExp('PRODUCTVERSION ' + rcVersion));
 assert.match(rc, /^1 ICON "assets\/app\.ico"/m);
 assert.match(build, /rerun-if-changed=assets\/app\.ico/);
-assert.match(core, /version: "0\.5\.6"/);
-assert.match(gui, /wide\("Notion → Obsidian"\)\.as_ptr\(\)/);
+assert.match(core, new RegExp('version: "' + versionPattern + '"'));
+assert.match(gui, new RegExp('Notion_Obsidian_v' + versionPattern));
+assert.match(gui, /wide\\("Notion → Obsidian"\\)\\.as_ptr\\(\\)/);
 assert.doesNotMatch(gui, /wide\("Notion → Obsidian ·/);
 assert.match(gui, /"Конвертировать"/);
 assert.match(gui, /"Отменить"/);
