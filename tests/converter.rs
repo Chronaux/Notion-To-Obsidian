@@ -63,7 +63,7 @@ fn local_attachments_and_external_urls() {
     let ext = "https://example.com/path_(two)?x=1&y=2#anchor";
     let p=archive(t.path(),vec![s(format!("Root {A}.md"),format!("# Root\n\n[Child](Root/Child%20(one)%20{B}.md)\n![image](Root/image.png)\n[Web]({ext})\n{ext}")),s(format!("Root/Child (one) {B}.md"),"# Child (one)"),("Root/image.png".into(),b"\x89PNG\r\n\x1a\nfixture".to_vec())]);
     let r = convert(&p, &t.path().join("out")).unwrap();
-    let text = fs::read_to_string(t.path().join("out/Root.md")).unwrap();
+    let text = fs::read_to_string(t.path().join("out/Root/Root.md")).unwrap();
     assert!(text.contains("[[Root/Child (one)|Child]]"));
     assert!(text.contains("![[_attachments/"));
     assert_eq!(text.matches(ext).count(), 2);
@@ -453,13 +453,55 @@ fn a_real_page_named_oglavlenie_is_preserved() {
 }
 
 #[test]
+fn parent_page_and_subpages_share_one_folder_without_duplicate_sibling() {
+    let t = root();
+    let child_one = "cccccccccccccccccccccccccccccccc";
+    let child_two = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let p = archive(
+        t.path(),
+        vec![
+            s(
+                format!("Инструкция {A}.md"),
+                format!("# Инструкция\n\n## Веб Учитель\n\n[Поурочное планирование](Инструкция/Поурочное%20планирование%20{B}.md)"),
+            ),
+            s(
+                format!("Инструкция/Поурочное планирование {B}.md"),
+                format!("# Поурочное планирование\n\n[Первый](Поурочное%20планирование/Первый%20{child_one}.md)\n[Второй](Поурочное%20планирование/Второй%20{child_two}.md)"),
+            ),
+            s(
+                format!("Инструкция/Поурочное планирование/Первый {child_one}.md"),
+                "# Первый\n\nТекст первой страницы",
+            ),
+            s(
+                format!("Инструкция/Поурочное планирование/Второй {child_two}.md"),
+                "# Второй\n\nТекст второй страницы",
+            ),
+        ],
+    );
+    let out = t.path().join("out");
+    let report = convert(&p, &out).unwrap();
+    let dir = "Инструкция/Веб Учитель/Поурочное планирование";
+    assert_eq!(report.mapping[B], format!("{dir}/Поурочное планирование.md"));
+    assert_eq!(report.mapping[child_one], format!("{dir}/Первый.md"));
+    assert_eq!(report.mapping[child_two], format!("{dir}/Второй.md"));
+    assert!(!out.join("Инструкция/Веб Учитель/Поурочное планирование.md").exists());
+    let parent = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
+    assert!(parent.contains(&format!("[[{dir}/Первый|Первый]]")));
+    assert!(parent.contains(&format!("[[{dir}/Второй|Второй]]")));
+    assert!(fs::read_to_string(out.join(&report.mapping[child_one])).unwrap().contains("Текст первой"));
+    let root_note = fs::read_to_string(out.join(&report.mapping[A])).unwrap();
+    assert!(root_note.contains(&format!("[[{dir}/Поурочное планирование|Поурочное планирование]]")));
+    assert_eq!(report.audit["passed"], true);
+}
+
+#[test]
 fn hierarchy_uses_headings_and_preserves_distinct_same_title() {
     let t = root();
     let c = "cccccccccccccccccccccccccccccccc";
     let p=archive(t.path(),vec![s(format!("Инструкция {A}.md"),format!("# Инструкция\n\n## Веб Учитель\n\n[ДЗ](Инструкция/Домашние%20задания%20{B}.md)\n\n## Веб Организация\n\n[ДЗ](Инструкция/Домашние%20задания%20{c}.md)")),s(format!("Инструкция/Домашние задания {B}.md"),"# Домашние задания\n\nТэг: Веб Учитель\n\n[Child](Домашние%20задания/Child%20dddddddddddddddddddddddddddddddd.md)"),s(format!("Инструкция/Домашние задания {c}.md"),"# Домашние задания\n\nТэг: Веб Организация"),s(format!("Инструкция/Домашние задания/Child {D}.md"),"# Child")]);
     let out = t.path().join("out");
     let r = convert(&p, &out).unwrap();
-    assert_eq!(r.mapping[B], "Инструкция/Веб Учитель/Домашние задания.md");
+    assert_eq!(r.mapping[B], "Инструкция/Веб Учитель/Домашние задания/Домашние задания.md");
     assert_eq!(
         r.mapping[c],
         "Инструкция/Веб Организация/Домашние задания.md"
@@ -768,13 +810,13 @@ fn nested_database_subpages_follow_records_and_unrelated_pages_stay_in_instructi
     let report = convert(&p, &out).unwrap();
     let folder = "Базы данных/Инструкция/Учитель/Задания";
     assert_eq!(report.mapping[B], "Инструкция/Учитель/Задания.md");
-    assert_eq!(report.mapping[row_id], format!("{folder}/Ряд.md"));
+    assert_eq!(report.mapping[row_id], format!("{folder}/Ряд/Ряд.md"));
     assert_eq!(report.mapping[child_id], format!("{folder}/Ряд/Детали.md"));
     assert!(report.mapping[other_id].starts_with("Инструкция/"));
     assert!(!report.mapping[other_id].starts_with("Базы данных/"));
     let article = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
     assert!(article.contains(&format!("![[{folder}/Задания#^notion-table]]")));
-    assert!(article.contains(&format!("[[{folder}/Ряд|Ряд]]")));
+    assert!(article.contains(&format!("[[{folder}/Ряд/Ряд|Ряд]]")));
     let row = fs::read_to_string(out.join(&report.mapping[row_id])).unwrap();
     assert!(row.contains(report.mapping[child_id].trim_end_matches(".md")));
     let base_path = report.databases[0]["base"].as_str().unwrap();
