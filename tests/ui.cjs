@@ -11,7 +11,7 @@ const gui = fs.readFileSync('src/gui.rs', 'utf8');
 const workflow = fs.readFileSync('.github/workflows/windows-release.yml', 'utf8');
 const packaging = fs.readFileSync('scripts/package_release.py', 'utf8');
 const core = fs.readFileSync('src/lib.rs', 'utf8');
-const version = '0.5.6';
+const version = '0.5.7';
 assert.match(cargo, /version = "0\.5\.6"/);
 assert.match(lock, /name = "notion-to-obsidian"\s+version = "0\.5\.6"/);
 assert.match(rc, /FILEVERSION 0,5,6,0/);
