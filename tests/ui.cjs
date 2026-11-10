@@ -24,7 +24,7 @@ assert.match(rc, /^1 ICON "assets\/app\.ico"/m);
 assert.match(build, /rerun-if-changed=assets\/app\.ico/);
 assert.match(core, new RegExp('version: "' + versionPattern + '"'));
 assert.match(gui, new RegExp('Notion_Obsidian_v' + versionPattern));
-assert.match(gui, /wide\\("Notion → Obsidian"\\)\\.as_ptr\\(\\)/);
+assert.match(gui, /wide\("Notion → Obsidian"\)\.as_ptr\(\)/);
 assert.doesNotMatch(gui, /wide\("Notion → Obsidian ·/);
 assert.match(gui, /"Конвертировать"/);
 assert.match(gui, /"Отменить"/);
