@@ -885,7 +885,8 @@ impl App {
         }
         (methods.release)(picker);
         SetFocus(self.hwnd);
-    }}
+    }
+}
 fn fresh_path(path: PathBuf) -> PathBuf {
     if !path.exists() {
         return path;
