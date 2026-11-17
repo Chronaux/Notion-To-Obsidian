@@ -611,8 +611,8 @@ impl App {
             ("STATIC", "", 0, 0), // reserved index; no ZIP-check button
             ("BUTTON", "Конвертировать", 0x10000, 106),
             ("BUTTON", "Создавать отчёт о переносе", 0x10000, 111),
-            ("STATIC", "Выберите ZIP-экспорт Notion", 0, 0),
-            ("STATIC", "Результат будет создан в новой папке; исходники не изменятся", 0x4000, 0),
+            ("STATIC", "", 0, 0), // status is populated only during conversion
+            ("STATIC", "", 0, 0), // no idle explanation in the footer
             ("BUTTON", "Открыть папку", 0x10000, 109),
             ("BUTTON", "Пропускать отсутствующие страницы", 0x10000, 110),
             ("BUTTON", "Справка по ZIP", 0x10000, 112),
@@ -1117,7 +1117,8 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         0x24 => { // WM_GETMINMAXINFO
             let points = l as *mut Point;
             (*points.add(3)).x = (760.0 * app.scale).round() as i32;
-            (*points.add(3)).y = (if app.status_visible { 535.0 } else { 435.0 } * app.scale).round() as i32;
+            let min_height = if app.status_visible { 535.0 } else { 435.0 };
+            (*points.add(3)).y = (min_height * app.scale).round() as i32;
             0
         }
         5 => { // WM_SIZE
@@ -1126,8 +1127,8 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         }
         0x111 => { // WM_COMMAND
             // EN_CHANGE on a path field invalidates any previous conversion summary.
-            if (w & 0xffff == 101 || w & 0xffff == 103)
-                && (w >> 16) & 0xffff == 0x0300 && !app.busy {
+            if ((w & 0xffff) == 101 || (w & 0xffff) == 103)
+                && ((w >> 16) & 0xffff) == 0x0300 && !app.busy {
                 app.set_status_visible(false);
             }
             match w & 0xffff {

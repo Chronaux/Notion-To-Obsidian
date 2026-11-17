@@ -255,7 +255,7 @@ dependencies = [
 
 [[package]]
 name = "notion-to-obsidian"
-version = "0.5.13"
+version = "0.5.14"
 dependencies = [
  "csv",
  "html-escape",
