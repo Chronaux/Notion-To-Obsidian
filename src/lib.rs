@@ -14,6 +14,8 @@ use std::{
     },
 };
 use unicode_normalization::UnicodeNormalization;
+pub mod options;
+use options::{ConversionOptions, DatabaseLocation, Sections, Unmatched, ParentPage, Toc, Callouts};
 
 pub type Result<T> = std::result::Result<T, String>;
 static ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-fA-F0-9]{32}").unwrap());
@@ -574,6 +576,7 @@ pub struct Converter {
     pub report: Report,
     skip_missing_pages: bool,
     write_report: bool,
+    options: ConversionOptions,
     cancel: Arc<AtomicBool>,
     progress: Box<dyn Fn(&str) + Send>,
 }
@@ -591,6 +594,7 @@ impl Converter {
             section_nodes: BTreeMap::new(),
             skip_missing_pages: false,
             write_report: true, // Preserve existing CLI/library behavior.
+            options: ConversionOptions::knowledge(),
             report: Report {
                 version: "0.5.14".into(),
                 ..Default::default()
@@ -609,6 +613,11 @@ impl Converter {
     /// Auditing and the technical import-state.json remain independent.
     pub fn write_report(mut self, enabled: bool) -> Self {
         self.write_report = enabled;
+        self
+    }
+    /// Select an export preset or a validated custom profile.
+    pub fn options(mut self, options: ConversionOptions) -> Self {
+        self.options = options;
         self
     }
     fn check(&self) -> Result<()> {
@@ -851,6 +860,7 @@ impl Converter {
         for di in 0..self.dbs.len() {
             self.check()?;
             let db = self.dbs[di].clone();
+            let title_key = self.options.title_key(&db.uid, &db.columns);
             let mut available = self
                 .pages
                 .iter()
@@ -870,9 +880,7 @@ impl Converter {
                 let mut proposals = vec![];
                 for &ri in &remaining {
                     let row = &db.rows[ri];
-                    let title = db
-                        .columns
-                        .first()
+                    let title = title_key
                         .and_then(|k| row.get(k))
                         .map(String::as_str)
                         .unwrap_or("");
@@ -885,7 +893,7 @@ impl Converter {
                         let mut score = if tm { 100 } else { 0 };
                         let mut agreements = 0;
                         for (k, v) in row {
-                            if Some(k) == db.columns.first() || v.is_empty() {
+                            if Some(k.as_str()) == title_key || v.is_empty() {
                                 continue;
                             }
                             let exported = props[&pi].get(k).map(String::as_str).unwrap_or("");
@@ -969,9 +977,7 @@ impl Converter {
                     pi
                 } else {
                     let uid = hash(format!("{}\0{}\0{ri}", db.uid, pretty(row)))[..32].to_string();
-                    let title = db
-                        .columns
-                        .first()
+                    let title = title_key
                         .and_then(|k| row.get(k))
                         .filter(|s| !s.is_empty())
                         .cloned()
@@ -1025,6 +1031,10 @@ impl Converter {
                 dir = parent(dir);
             }
         }
+        if self.options.structure.sections == Sections::Source {
+            return (dirs, page_folders);
+        }
+        let fallback = self.options.structure.unmatched_folder.as_deref().unwrap_or("Другие сервисы").to_string();
         let roots = self
             .pages
             .iter()
@@ -1048,7 +1058,7 @@ impl Converter {
             let root_folder = safe_name(&root.title);
             dirs.insert(physical.clone(), root_folder.clone());
             page_folders.insert(root.source.clone(), root_folder.clone());
-            let mut section = "Другие сервисы".to_string();
+            let mut section = fallback.clone();
             let mut in_aside = false;
             let mut grouped = BTreeMap::<String, String>::new();
             for line in root.text.lines() {
@@ -1056,7 +1066,7 @@ impl Converter {
                     in_aside = true;
                 } else if line.trim() == "</aside>" {
                     in_aside = false;
-                    section = "Другие сервисы".into();
+                    section = fallback.clone();
                 } else if in_aside
                     && line.starts_with("**")
                     && line.ends_with("**")
@@ -1094,9 +1104,14 @@ impl Converter {
                         .values()
                         .next()
                         .cloned()
-                        .unwrap_or("Другие сервисы".into())
+                        .unwrap_or_else(|| fallback.clone())
                 });
-                let group = join(&root_folder, &safe_name(&section));
+                let group = if grouped.contains_key(&page.source)
+                    || self.options.structure.unmatched == Unmatched::NamedFolder {
+                    join(&root_folder, &safe_name(&section))
+                } else {
+                    root_folder.clone()
+                };
                 page_folders.insert(page.source.clone(), group.clone());
                 self.section_nodes
                     .entry(group.clone())
@@ -1165,13 +1180,15 @@ impl Converter {
         // top-level folder, mirroring the reconstructed Notion hierarchy.
         // Paths for embedded tables, Bases views and wikilinks are all assigned
         // here before rewriting any page content.
-        const DATABASES_ROOT: &str = "Базы данных";
+        let databases_root = if self.options.databases.location == DatabaseLocation::SeparateRoot {
+            self.options.databases.folder_name.clone()
+        } else { None };
         for di in 0..self.dbs.len() {
             let db = self.dbs[di].clone();
-            let folder = join(
-                DATABASES_ROOT,
-                &directory(&db.folder, &mut dirs, &mut used_dirs),
-            );
+            let source_folder = directory(&db.folder, &mut dirs, &mut used_dirs);
+            let folder = if let Some(root) = &databases_root {
+                join(root, &source_folder)
+            } else { source_folder };
             let target = self.reserve(
                 join(&folder, &format!("{}.md", safe_name(&db.title))),
                 &db.uid,
@@ -1189,7 +1206,7 @@ impl Converter {
             );
             self.ids.insert(db.uid.clone(), target);
             for col in &db.columns {
-                let key = if is_tag_column(col) {
+                let key = if self.options.is_tag_column(&db.uid, col) {
                     "tags".to_string()
                 } else if [
                     "notion_id",
@@ -1223,10 +1240,10 @@ impl Converter {
                 p.source.starts_with(&(db.folder.clone() + "/"))
             });
             let folder = if in_database {
-                join(
-                    DATABASES_ROOT,
-                    &directory(parent(&p.source), &mut dirs, &mut used_dirs),
-                )
+                let source_folder = directory(parent(&p.source), &mut dirs, &mut used_dirs);
+                if let Some(root) = &databases_root {
+                    join(root, &source_folder)
+                } else { source_folder }
             } else {
                 page_folders
                     .get(&p.source)
@@ -1236,8 +1253,9 @@ impl Converter {
             // The folder must contain actual Markdown subpages. A database
             // row directory is handled separately: the containing article
             // stays in the instruction tree, while records remain in Базы данных.
-            let ordinary_folder = folder
-                .strip_prefix("Базы данных/")
+            let prefix = databases_root.as_ref().map(|root| format!("{root}/"));
+            let ordinary_folder = prefix.as_deref()
+                .and_then(|prefix| folder.strip_prefix(prefix))
                 .unwrap_or(&folder);
             let stem = basename(&p.source).trim_end_matches(".md");
             let bare = rx(r"\s+[a-fA-F0-9]{32}$").replace(stem, "").to_string();
@@ -1251,6 +1269,9 @@ impl Converter {
             ];
             let mut note_folder = folder.clone();
             for source_dir in source_dir_candidates {
+                if self.options.structure.parent_page == ParentPage::Sibling {
+                    break;
+                }
                 if !direct_page_dirs.contains(&source_dir)
                     || assigned_parent_dirs.contains(&source_dir)
                     || self.dbs.iter().any(|db| db.folder == source_dir)
@@ -1271,10 +1292,8 @@ impl Converter {
                 let own_dir = directory(&source_dir, &mut dirs, &mut used_dirs);
                 assigned_parent_dirs.insert(source_dir);
                 note_folder = if in_database {
-                    join(DATABASES_ROOT, &own_dir)
-                } else {
-                    own_dir
-                };
+                    if let Some(root) = &databases_root { join(root, &own_dir) } else { own_dir }
+                } else { own_dir };
                 break;
             }
             let target = self.reserve(
