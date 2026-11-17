@@ -364,7 +364,7 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
             bottom: v(y + FIELD_HEIGHT),
         }, FIELD, FIELD, v(14));
     }
-    rule(dc, m, v(346), client.right - m);
+    rule(dc, m, v(386), client.right - m);
     if app.progress_visible {
         let track = Rect {
             left: m, top: client.bottom - v(20),
@@ -391,7 +391,7 @@ unsafe fn draw_button(item: &DrawItem, app: &App) {
     let disabled = item.item_state & 0x4 != 0;
     let down = item.item_state & 0x1 != 0;
     let focused = item.item_state & 0x10 != 0;
-    let check = id == 110;
+    let check = id == 110 || id == 111;
     let primary = id == 106 && !app.busy;
     let foreground = if disabled { rgb(114, 111, 121) } else { TEXT };
 
@@ -453,11 +453,12 @@ unsafe fn draw_button(item: &DrawItem, app: &App) {
             left, top: center - side / 2,
             right: left + side, bottom: center + side / 2,
         };
+        let checked = if id == 110 { app.skip_missing } else { app.write_report };
         rounded(item.dc, &check_rect,
-            if app.skip_missing { ACCENT } else { BG },
-            if app.skip_missing { ACCENT } else { MUTED },
+            if checked { ACCENT } else { BG },
+            if checked { ACCENT } else { MUTED },
             (5.0 * app.scale).round() as i32);
-        if app.skip_missing {
+        if checked {
             SetBkMode(item.dc, 1);
             SetTextColor(item.dc, TEXT);
             let tick = wide("✓");
@@ -511,7 +512,7 @@ fn count_event(message: &str, prefix: &str) -> Option<(usize, usize)> {
 
 enum Event {
     Message(String),
-    Done(std::result::Result<Report, String>, bool),
+    Done(std::result::Result<Report, String>),
 }
 struct App {
     hwnd: H,
@@ -520,14 +521,14 @@ struct App {
     titlefont: H,
     bg_brush: H,
     field_brush: H,
-    button_procs: [isize; 5],
+    button_procs: [isize; 4],
     hover_button: Option<u32>,
     skip_missing: bool,
+    write_report: bool,
     open_ready: bool,
     rx: Option<Receiver<Event>>,
     stop: Arc<AtomicBool>,
     busy: bool,
-    inspecting: bool,
     cancel_requested: bool,
     progress_visible: bool,
     progress_target: f32,
@@ -551,7 +552,7 @@ impl App {
         // 11 is deliberately unused: cancellation lives in the primary button.
         let defs = [
             ("STATIC", "Notion → Obsidian", 0u32, 0),
-            ("STATIC", "Локально · без установки", 0x2, 0),
+            ("STATIC", "", 0, 0), // reserved index; no subtitle
             ("STATIC", "ZIP-экспорт Notion", 0, 0),
             ("EDIT", "", 0x80 | 0x10000, 101),
             ("BUTTON", "Выбрать ZIP", 0x10000, 102),
@@ -559,9 +560,9 @@ impl App {
             ("EDIT", "", 0x80 | 0x10000, 103),
             ("BUTTON", "Выбрать папку", 0x10000, 104),
             ("STATIC", "", 0, 0),
-            ("BUTTON", "Проверить ZIP", 0x10000, 105),
+            ("STATIC", "", 0, 0), // reserved index; no ZIP-check button
             ("BUTTON", "Конвертировать", 0x10000, 106),
-            ("STATIC", "", 0, 0),
+            ("BUTTON", "Создавать отчёт о переносе", 0x10000, 111),
             ("STATIC", "Выберите ZIP-экспорт Notion", 0, 0),
             ("STATIC", "Результат будет создан в новой папке; исходники не изменятся", 0x4000, 0),
             ("BUTTON", "Открыть папку", 0x10000, 109),
@@ -587,8 +588,9 @@ impl App {
         // EM_SETCUEBANNER: a visible hint when the ZIP path is empty.
         SendMessageW(self.controls[3], 0x1501, 0,
             wide("Нажмите «Обзор» или перетащите ZIP").as_ptr() as isize);
+        ShowWindow(self.controls[1], 0);
         ShowWindow(self.controls[8], 0);
-        ShowWindow(self.controls[11], 0);
+        ShowWindow(self.controls[9], 0);
         ShowWindow(self.controls[14], 0);
         for i in [3usize, 6] {
             // EM_SETMARGINS is horizontal only. Vertical alignment comes from
@@ -599,7 +601,7 @@ impl App {
             SetWindowTheme(self.controls[i], wide("DarkMode_Explorer").as_ptr(), null());
         }
         // Hover feedback and a pointing-hand cursor for every action button.
-        for (slot, index) in [4usize, 7, 9, 10, 14].iter().enumerate() {
+        for (slot, index) in [4usize, 7, 10, 14].iter().enumerate() {
             self.button_procs[slot] =
                 SetWindowLongPtrW(self.controls[*index], -4, button_proc as isize);
         }
@@ -615,8 +617,6 @@ impl App {
         let v = |n: i32| (n as f32 * self.scale).round() as i32;
         let m = v(12);
         let roww = w - 2 * m;
-        let action_gap = v(10);
-        let check_w = ((roww - action_gap) * 34 / 100).max(v(180));
         let browse_w = v(88);
         let browse_x = w - m - browse_w - v(6);
         let edit_x = m + v(6);
@@ -632,8 +632,8 @@ impl App {
             top + (field_h - child_height) / 2
         };
         let rows = [
-            (m, v(14), roww * 60 / 100, v(28)),  // App title
-            (w - m - v(245), v(17), v(245), v(24)), // Privacy note
+            (m, v(14), roww, v(28)),             // App title
+            (0, 0, 0, 0),                         // No subtitle
             (m, v(75), roww, v(22)),             // ZIP label
             (edit_x, centered_y(zip_top, edit_h), edit_w, edit_h), // ZIP text
             (browse_x, centered_y(zip_top, browse_h), browse_w, browse_h), // ZIP chooser
@@ -641,13 +641,13 @@ impl App {
             (edit_x, centered_y(output_top, edit_h), edit_w, edit_h), // Output text
             (browse_x, centered_y(output_top, browse_h), browse_w, browse_h), // Output chooser
             (0, 0, 0, 0),                         // unused
-            (m, v(281), check_w, v(49)),         // Secondary action
-            (m + check_w + action_gap, v(281), roww - check_w - action_gap, v(49)),
-            (0, 0, 0, 0),                         // unused
-            (m + v(23), v(365), status_w - v(23), v(23)), // Status
-            (m + v(23), v(390), status_w - v(23), v(22)), // Details
-            (w - m - v(173), v(365), v(173), v(38)), // Open folder
-            (m, v(239), roww, v(32)),           // Skip missing
+            (0, 0, 0, 0),                         // removed inspect action
+            (m, v(317), roww, v(49)),             // Full-width primary action
+            (m, v(273), roww, v(32)),             // Optional report checkbox
+            (m + v(23), v(402), status_w - v(23), v(23)), // Status
+            (m + v(23), v(427), status_w - v(23), v(22)), // Details
+            (w - m - v(173), v(402), v(173), v(38)), // Open folder
+            (m, v(239), roww, v(32)),             // Skip missing checkbox
         ];
         for (i, (x, y, width, height)) in rows.iter().enumerate() {
             if *width > 0 {
@@ -673,10 +673,10 @@ impl App {
     unsafe fn set_busy(&mut self, busy: bool) {
         self.busy = busy;
         self.hover_button = None;
-        for i in [4usize, 7, 9, 10, 14] {
+        for i in [4usize, 7, 10, 14] {
             InvalidateRect(self.controls[i], null(), 0);
         }
-        for i in [3, 4, 6, 7, 9, 15] {
+        for i in [3, 4, 6, 7, 11, 15] {
             EnableWindow(self.controls[i], (!busy) as i32);
         }
         self.cancel_requested = false;
@@ -685,27 +685,27 @@ impl App {
         InvalidateRect(self.controls[10], null(), 1);
     }
 
-    unsafe fn start(&mut self, inspect: bool) {
+    unsafe fn start(&mut self) {
         if self.busy { return; }
         let archive = PathBuf::from(get(self.controls[3]).trim());
         let output = PathBuf::from(get(self.controls[6]).trim());
         let skip_missing = self.skip_missing;
+        let write_report = self.write_report;
         if !archive.is_file() {
             dialog(self.hwnd, "Выберите существующий ZIP-файл.");
             return;
         }
-        if !inspect && (get(self.controls[6]).trim().is_empty() || output.exists()) {
+        if get(self.controls[6]).trim().is_empty() || output.exists() {
             dialog(self.hwnd,
                 "Укажите новую папку, которой ещё нет. Существующие файлы не перезаписываются.");
             return;
         }
         self.open_ready = false;
-        self.inspecting = inspect;
         self.progress_visible = true;
         self.progress_target = 0.0;
         self.progress_display = 0.0;
         ShowWindow(self.controls[14], 0);
-        set(self.controls[12], if inspect { "Проверяем ZIP…" } else { "Подготавливаем конвертацию…" });
+        set(self.controls[12], "Подготавливаем конвертацию…");
         set(self.controls[13], "Проверяем исходные файлы");
         self.set_busy(true);
         self.last_output = output.clone();
@@ -718,11 +718,11 @@ impl App {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let c = Converter::new(
                     move |s| { let _ = progress.send(Event::Message(s.into())); }, stop,
-                ).skip_missing_pages(skip_missing);
-                if inspect { c.inspect(&archive) } else { c.run(&archive, &output) }
+                ).skip_missing_pages(skip_missing).write_report(write_report);
+                c.run(&archive, &output)
             })).unwrap_or_else(|_|
                 Err("Внутренняя ошибка. Итоговая папка не опубликована.".into()));
-            let _ = tx.send(Event::Done(result, inspect));
+            let _ = tx.send(Event::Done(result));
         });
         InvalidateRect(self.hwnd, null(), 0);
     }
@@ -731,7 +731,7 @@ impl App {
         if self.cancel_requested { return; }
         if let Some((done, total)) = count_event(s, "Сопоставлено баз: ") {
             let fraction = if total == 0 { 1.0 } else { (done as f32 / total as f32).min(1.0) };
-            self.progress_target = if self.inspecting { 0.25 + 0.70 * fraction } else { 0.18 + 0.09 * fraction };
+            self.progress_target = 0.18 + 0.09 * fraction;
             set(self.controls[12], "Сопоставляем таблицы");
             set(self.controls[13], &format!("{done} из {total} баз"));
         } else if let Some((done, total)) = count_event(s, "Обработано страниц: ") {
@@ -749,7 +749,7 @@ impl App {
             set(self.controls[12], "Читаем архив");
             set(self.controls[13], "Проверяем ZIP и вложения");
         } else if s.starts_with("Сопоставление CSV") {
-            self.progress_target = if self.inspecting { 0.25 } else { 0.18 };
+            self.progress_target = 0.18;
             set(self.controls[12], "Сопоставляем таблицы");
             set(self.controls[13], "Находим записи и базы данных");
         } else if s.starts_with("Преобразование страниц") {
@@ -776,7 +776,7 @@ impl App {
         for event in events {
             match event {
                 Event::Message(s) => self.on_message(&s),
-                Event::Done(result, inspect) => {
+                Event::Done(result) => {
                     let cancelled = self.cancel_requested;
                     self.set_busy(false);
                     self.rx = None;
@@ -785,29 +785,26 @@ impl App {
                             self.progress_visible = true;
                             self.progress_target = 1.0;
                             self.progress_display = 1.0;
-                            set(self.controls[12],
-                                if inspect { "Проверка завершена" } else { "Хранилище готово" });
+                            set(self.controls[12], "Хранилище готово");
                             let pages = r.stats.get("source_pages").copied().unwrap_or(0);
                             let dbs = r.stats.get("source_databases").copied().unwrap_or(0);
                             let rows = r.stats.get("source_rows").copied().unwrap_or(0);
                             let warnings = r.warnings.len();
                             set(self.controls[13], &format!(
                                 "{pages} страниц · {dbs} баз · {rows} записей · {warnings} предупреждений"));
-                            if !inspect {
-                                self.open_ready = true;
-                                ShowWindow(self.controls[14], 1);
-                                EnableWindow(self.controls[14], 1);
-                            }
+                            self.open_ready = true;
+                            ShowWindow(self.controls[14], 1);
+                            EnableWindow(self.controls[14], 1);
                         }
                         Ok(_) => {
                             // A cancellation after publication cannot remove a completed Vault.
                             // Report actual success rather than pretending it was rolled back.
                             self.progress_target = 1.0;
                             self.progress_display = 1.0;
-                            self.open_ready = !inspect;
-                            set(self.controls[12], if inspect { "Проверка завершена" } else { "Хранилище готово" });
+                            self.open_ready = true;
+                            set(self.controls[12], "Хранилище готово");
                             set(self.controls[13], "Операция завершилась до обработки запроса отмены");
-                            if !inspect { ShowWindow(self.controls[14], 1); }
+                            ShowWindow(self.controls[14], 1);
                         }
                         Err(e) => {
                             self.progress_visible = false;
@@ -817,7 +814,7 @@ impl App {
                                 set(self.controls[12], "Операция отменена");
                                 set(self.controls[13], "Итоговая папка не создана");
                             } else {
-                                set(self.controls[12], if inspect { "Ошибка проверки ZIP" } else { "Ошибка конвертации" });
+                                set(self.controls[12], "Ошибка конвертации");
                                 set(self.controls[13], "Подробности в сообщении об ошибке");
                                 dialog(self.hwnd, &e);
                             }
@@ -858,7 +855,7 @@ impl App {
             let end = file.iter().position(|&x| x == 0).unwrap();
             set(self.controls[3], &String::from_utf16_lossy(&file[..end]));
             set(self.controls[12], "Архив выбран");
-            set(self.controls[13], "Проверьте ZIP или запустите конвертацию");
+            set(self.controls[13], "Выберите хранилище и нажмите «Конвертировать»");
         }
         SetFocus(self.hwnd);
     }
@@ -932,9 +929,8 @@ unsafe extern "system" fn button_proc(hwnd: H, msg: u32, w: usize, l: isize) -> 
     let app = &mut *ptr;
     let (slot, id) = if hwnd == app.controls[4] { (0, 102) }
         else if hwnd == app.controls[7] { (1, 104) }
-        else if hwnd == app.controls[9] { (2, 105) }
-        else if hwnd == app.controls[10] { (3, 106) }
-        else if hwnd == app.controls[14] { (4, 109) }
+        else if hwnd == app.controls[10] { (2, 106) }
+        else if hwnd == app.controls[14] { (3, 109) }
         else { return DefWindowProcW(hwnd, msg, w, l); };
     match msg {
         0x0200 if IsWindowEnabled(hwnd) != 0 => { // WM_MOUSEMOVE
@@ -1024,7 +1020,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         0x24 => { // WM_GETMINMAXINFO
             let points = l as *mut Point;
             (*points.add(3)).x = (760.0 * app.scale).round() as i32;
-            (*points.add(3)).y = (485.0 * app.scale).round() as i32;
+            (*points.add(3)).y = (535.0 * app.scale).round() as i32;
             0
         }
         5 => { // WM_SIZE
@@ -1035,7 +1031,6 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
             match w & 0xffff {
                 102 => if !app.busy { app.choose_zip() },
                 104 => if !app.busy { app.choose_output() },
-                105 => app.start(true),
                 106 => {
                     if app.busy {
                         if !app.cancel_requested {
@@ -1047,12 +1042,16 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                             set(app.controls[13], "Очищаем временные файлы");
                         }
                     } else {
-                        app.start(false);
+                        app.start();
                     }
                 }
                 110 if !app.busy => {
                     app.skip_missing = !app.skip_missing;
                     InvalidateRect(app.controls[15], null(), 1);
+                }
+                111 if !app.busy => {
+                    app.write_report = !app.write_report;
+                    InvalidateRect(app.controls[11], null(), 1);
                 }
                 109 if app.open_ready => {
                     ShellExecuteW(
@@ -1130,14 +1129,14 @@ pub fn launch(archive: Option<PathBuf>) {
             titlefont: 0,
             bg_brush: 0,
             field_brush: 0,
-            button_procs: [0; 5],
+            button_procs: [0; 4],
             hover_button: None,
             skip_missing: true,
+            write_report: false,
             open_ready: false,
             rx: None,
             stop: Arc::new(AtomicBool::new(false)),
             busy: false,
-            inspecting: false,
             cancel_requested: false,
             progress_visible: false,
             progress_target: 0.0,
@@ -1147,7 +1146,7 @@ pub fn launch(archive: Option<PathBuf>) {
         });
         let ptr = Box::into_raw(app);
         let width = (790.0 * scale) as i32;
-        let height = (490.0 * scale) as i32;
+        let height = (540.0 * scale) as i32;
         let x = ((GetSystemMetrics(0) - width) / 2).max(0);
         let y = ((GetSystemMetrics(1) - height) / 2).max(0);
         let hwnd = CreateWindowExW(
