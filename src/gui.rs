@@ -390,7 +390,7 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
         }, FIELD, FIELD, v(14));
     }
     if app.status_visible {
-        rule(dc, m, v(386), client.right - m);
+        rule(dc, m, v(456), client.right - m);
     }
     if app.progress_visible {
         let track = Rect {
@@ -783,10 +783,10 @@ impl App {
     unsafe fn set_busy(&mut self, busy: bool) {
         self.busy = busy;
         self.hover_button = None;
-        for i in [4usize, 7, 10, 14] {
+        for i in [4usize, 7, 10, 14, 19] {
             InvalidateRect(self.controls[i], null(), 0);
         }
-        for i in [3, 4, 6, 7, 11, 15] {
+        for i in [3, 4, 6, 7, 11, 15, 18, 19] {
             EnableWindow(self.controls[i], (!busy) as i32);
         }
         self.cancel_requested = false;
@@ -801,6 +801,7 @@ impl App {
         let output = PathBuf::from(get(self.controls[6]).trim());
         let skip_missing = self.skip_missing;
         let write_report = self.write_report;
+        let options = self.options.clone();
         if !archive.is_file() {
             dialog(self.hwnd, "Выберите существующий ZIP-файл.");
             return;
@@ -829,7 +830,7 @@ impl App {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let c = Converter::new(
                     move |s| { let _ = progress.send(Event::Message(s.into())); }, stop,
-                ).skip_missing_pages(skip_missing).write_report(write_report);
+                ).skip_missing_pages(skip_missing).write_report(write_report).options(options);
                 c.run(&archive, &output)
             })).unwrap_or_else(|_|
                 Err("Внутренняя ошибка. Итоговая папка не опубликована.".into()));
@@ -1131,7 +1132,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         0x24 => { // WM_GETMINMAXINFO
             let points = l as *mut Point;
             (*points.add(3)).x = (760.0 * app.scale).round() as i32;
-            let min_height = if app.status_visible { 535.0 } else { 435.0 };
+            let min_height = if app.status_visible { 610.0 } else { 510.0 };
             (*points.add(3)).y = (min_height * app.scale).round() as i32;
             0
         }
@@ -1149,6 +1150,22 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                 102 => if !app.busy { app.choose_zip() },
                 104 => if !app.busy { app.choose_output() },
                 112 => dialog(hwnd, ZIP_HELP),
+                118 if !app.busy && ((w >> 16) & 0xffff) == 1 => {
+                    let choice = SendMessageW(app.controls[18], 0x0147, 0, 0);
+                    match choice {
+                        0 => app.options = ConversionOptions::universal(),
+                        1 => app.options = ConversionOptions::knowledge(),
+                        _ => {}
+                    }
+                    app.set_status_visible(false);
+                },
+                119 if !app.busy => {
+                    if let Some(options) = settings::show(hwnd, &app.options, app.scale) {
+                        app.options = options;
+                        SendMessageW(app.controls[18], 0x014E, 2, 0);
+                        app.set_status_visible(false);
+                    }
+                },
                 106 => {
                     if app.busy {
                         if !app.cancel_requested {
@@ -1249,13 +1266,14 @@ pub fn launch(archive: Option<PathBuf>) {
             titlefont: 0,
             bg_brush: 0,
             field_brush: 0,
-            button_procs: [0; 5],
+            button_procs: [0; 6],
             hover_button: None,
             tooltip: 0,
             help_text: wide(ZIP_HELP),
             status_visible: false,
             skip_missing: true,
             write_report: false,
+            options: ConversionOptions::knowledge(),
             open_ready: false,
             rx: None,
             stop: Arc::new(AtomicBool::new(false)),
