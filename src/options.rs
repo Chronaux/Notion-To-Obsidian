@@ -193,7 +193,7 @@ impl ConversionOptions {
             return Err("title_column: explicit требует overrides для базы.".into());
         }
         if self.content.tags == Tags::ConfiguredColumns && self.content.tag_columns.is_empty()
-            && self.databases.overrides.values().all(|o| o.tag_columns.as_ref().is_none_or(Vec::is_empty)) {
+            && self.databases.overrides.values().all(|o| o.tag_columns.as_ref().map_or(true, |v| v.is_empty())) {
             return Err("tags: configured_columns требует хотя бы одну колонку.".into());
         }
         for (uid, o) in &self.databases.overrides {
