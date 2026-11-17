@@ -14,6 +14,8 @@ concurrency:
 
 jobs:
   build:
+    permissions:
+      contents: write
     name: Test and cross-compile Windows x64
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -57,13 +59,32 @@ jobs:
         run: cargo build --release --locked --target x86_64-pc-windows-gnu
       - name: Package executable, documentation and checksums
         run: python3 scripts/package_release.py
-      - name: Upload unpacked Windows executable and documentation
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-x64-release
-          path: dist/bundle/
-          if-no-files-found: error
-          retention-days: 14
+      - name: Stage private draft release for Windows smoke test
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(python3 -c 'import tomllib;print(tomllib.load(open("Cargo.toml","rb"))["package"]["version"])')
+          tag="v$version"
+          asset=dist/NotionToObsidian_Windows_x64.zip
+          test -s "$asset"
+          test -s dist/SHA256SUMS.txt
+          if gh release view "$tag" >/dev/null 2>&1; then
+            existing_sha=$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')
+            is_draft=$(gh release view "$tag" --json isDraft --jq '.isDraft')
+            if [[ "$existing_sha" != "$GITHUB_SHA" || "$is_draft" != "true" ]]; then
+              echo "::error::Existing version $tag is not an editable draft from this commit. Bump the version."
+              exit 1
+            fi
+            gh release upload "$tag" "$asset" dist/SHA256SUMS.txt --clobber
+          else
+            gh release create "$tag" "$asset" dist/SHA256SUMS.txt \
+              --title "Notion → Obsidian $tag (Windows x64)" \
+              --target "$GITHUB_SHA" \
+              --notes "Portable Windows x64 app. Release is published after automated Windows smoke testing." \
+              --draft
+          fi
 
   smoke:
     name: Run Windows x64 conversion smoke test
@@ -72,10 +93,20 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-x64-release
-          path: extracted
+      - name: Download draft release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          New-Item -ItemType Directory -Path staged -Force | Out-Null
+          gh release download "v$version" --pattern "NotionToObsidian_Windows_x64.zip" --dir staged
+          gh release download "v$version" --pattern "SHA256SUMS.txt" --dir staged
+          $expected = ((Get-Content staged/SHA256SUMS.txt) -split '\s+')[0]
+          $actual = (Get-FileHash staged/NotionToObsidian_Windows_x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Staged release ZIP checksum mismatch" }
+          Expand-Archive -Path staged/NotionToObsidian_Windows_x64.zip -DestinationPath extracted -Force
       - name: Verify and run actual Windows EXE
         shell: pwsh
         run: |
@@ -114,7 +145,7 @@ jobs:
           Write-Host "Windows smoke test passed: EXE runs, flat vault, in-page TOC, no folder indices"
 
   release:
-    name: Publish latest ready-to-run ZIP in GitHub Releases
+    name: Publish tested Windows release
     if: github.ref == 'refs/heads/main'
     needs: [build, smoke]
     runs-on: ubuntu-24.04
@@ -123,37 +154,18 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-x64-release
-          path: dist/bundle
-      - name: Repackage verified executable for GitHub Releases
-        run: python3 scripts/package_release.py --repack
-      - name: Publish verified versioned release
+      - name: Publish tested draft release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           version=$(python3 -c 'import tomllib;print(tomllib.load(open("Cargo.toml","rb"))["package"]["version"])')
-          tag="v${version}"
-          asset=dist/NotionToObsidian_Windows_x64.zip
-          test -s "$asset"
-          test -s dist/SHA256SUMS.txt
-          if gh release view "$tag" >/dev/null 2>&1; then
-            existing_sha=$(git rev-parse "refs/tags/$tag^{commit}" 2>/dev/null || true)
-            if [[ "$existing_sha" != "$GITHUB_SHA" ]]; then
-              echo "::error::Version $tag already released from $existing_sha. Bump Cargo.toml and release metadata before changing a published version."
-              exit 1
-            fi
-            gh release upload "$tag" "$asset" dist/SHA256SUMS.txt --clobber
-          else
-            gh release create "$tag" "$asset" dist/SHA256SUMS.txt \
-              --title "Notion → Obsidian $tag (Windows x64)" \
-              --target "$GITHUB_SHA" \
-              --notes "Portable Windows x64 app. Download NotionToObsidian_Windows_x64.zip, extract, and run the EXE. No Rust or extra runtimes required. Source commit: $GITHUB_SHA." \
-              --latest
+          tag="v$version"
+          is_draft=$(gh release view "$tag" --json isDraft --jq '.isDraft')
+          if [[ "$is_draft" != "true" ]]; then
+            echo "::error::Expected draft release $tag, refusing to publish"
+            exit 1
           fi
+          gh release edit "$tag" --draft=false --latest
           echo "Ready-to-run download: https://github.com/$GITHUB_REPOSITORY/releases/latest/download/NotionToObsidian_Windows_x64.zip"

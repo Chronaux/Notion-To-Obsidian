@@ -25,7 +25,7 @@ rustup target add x86_64-pc-windows-gnu
 cargo build --release --locked --target x86_64-pc-windows-gnu
 ```
 
-Результат: `target/x86_64-pc-windows-gnu/release/notion-to-obsidian.exe`. Для версии 0.5.4 он упаковывается как `NotionToObsidian_v0.5.4.exe` автоматическим скриптом. Скрипт проверяет заголовок PE x64 и формирует `NotionToObsidian_Windows_x64.zip` и `SHA256SUMS.txt`. Приложению нужны только системные DLL Windows; сторонние среды выполнения не требуются.
+Результат: `target/x86_64-pc-windows-gnu/release/notion-to-obsidian.exe`. Для актуальной версии он упаковывается как `NotionToObsidian_v<version>.exe` автоматическим скриптом. Скрипт проверяет заголовок PE x64 и формирует `NotionToObsidian_Windows_x64.zip` и `SHA256SUMS.txt`. Приложению нужны только системные DLL Windows; сторонние среды выполнения не требуются.
 
 ## Командная строка
 
@@ -54,6 +54,7 @@ Workflow: [`.github/workflows/windows-release.yml`](../.github/workflows/windows
 - При `push` в `main` или ручном `Run workflow` проверяются Rust-тесты и ресурс иконки.
 - На Ubuntu c Rust stable и MinGW-w64 собирается самодостаточный Windows x64 EXE (GNU static CRT). Скрипт `scripts/package_release.py` создаёт ZIP с EXE, лицензиями и инструкцией; формируются SHA-256.
 - На настоящем Windows runner проверяются контрольная сумма ZIP, запуск конвертера в режиме CLI, создание Obsidian vault без вложенной `Vault`, отсутствие синтетических `Оглавление.md` и наличие содержания внутри статьи.
+- ZIP и SHA-256 сначала помещаются в **черновик релиза** (не публичный). Windows smoke-тест скачивает их из черновика, проверяет контрольные суммы и запуск EXE. После успеха черновик публикуется. Так не требуется квота хранения GitHub Actions artifacts.
 - **Только после успешных проверок** архив `NotionToObsidian_Windows_x64.zip` и `SHA256SUMS.txt` публикуются как GitHub Release по тегу `v<version>`. Постоянная ссылка — [latest/download](https://github.com/Chronaux/Notion-To-Obsidian/releases/latest/download/NotionToObsidian_Windows_x64.zip).
 - Для каждой новой версии сначала измените номер версии в `Cargo.toml`, `Cargo.lock`, `app.rc`, `src/lib.rs`, `src/gui.rs` и `tests/ui.cjs`. Выпущенный тег не переписывается другой версией кода: CI потребует поднять номер.
 

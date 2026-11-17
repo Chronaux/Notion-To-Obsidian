@@ -51,10 +51,13 @@ assert.match(gui, /CallWindowProcW/);
 assert.match(gui, /hover_browse/);
 assert.match(gui, /SetCursor\(LoadCursorW\(0, 32649usize/);
 assert.match(gui, /v\(105\), input_w - v\(4\), v\(40\)/);
-// GitHub Actions artifact is itself a ZIP. Its content must be unpacked files.
-assert.match(workflow, /path: dist\/bundle\//);
-assert.match(workflow, /path: extracted/);
-assert.match(workflow, /package_release\.py --repack/);
+// The tested ZIP is staged as a draft release, bypassing Actions artifact quota.
+assert.match(workflow, /gh release create/);
+assert.match(workflow, /--draft/);
+assert.match(workflow, /gh release download/);
+assert.match(workflow, /Expand-Archive/);
+assert.match(workflow, /gh release edit/);
+assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact@/);
 assert.match(packaging, /Leave WORK intact/);
 assert.match(packaging, /Nested archive detected/);
 const ico = fs.readFileSync('assets/app.ico');

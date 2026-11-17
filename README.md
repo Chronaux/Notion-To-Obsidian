@@ -10,7 +10,7 @@
 
 [Все выпуски](https://github.com/Chronaux/Notion-To-Obsidian/releases) · [Статус автоматической сборки](https://github.com/Chronaux/Notion-To-Obsidian/actions/workflows/windows-release.yml) · [История изменений](CHANGELOG.md) · [Материалы](docs/USAGE.md)
 
-В **GitHub Releases** лежит один готовый ZIP, содержащий EXE и документацию. ZIP, который GitHub автоматически создаёт при скачивании **Actions → Artifacts → windows-x64-release**, теперь содержит те же файлы **напрямую, без вложенного ZIP**.
+В **GitHub Releases** публикуется один ZIP с EXE и документацией. Сначала архив помещается в черновик релиза, проверяется на Windows и только после этого становится доступен для скачивания. Промежуточные артефакты GitHub Actions не используются.
 
 Распакуйте ZIP из Releases, запустите `NotionToObsidian_v0.5.8.exe` (имя содержит номер соответствующего выпуска). **Установка Rust, Python, .NET, Electron или WebView2 не требуется.** Приложение полностью локальное, Windows 10/11 x64.
 
