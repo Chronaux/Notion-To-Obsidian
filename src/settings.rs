@@ -29,7 +29,11 @@ impl Editor {
             v(x), v(y), v(w), v(h), self.hwnd, id, GetModuleHandleW(null()), null_mut(),
         );
         SendMessageW(handle, 0x0030, self.font as usize, 1);
-        if class == "COMBOBOX" || class == "EDIT" {
+        if class == "COMBOBOX" {
+            SetWindowTheme(handle, wide("DarkMode_Explorer").as_ptr(), null());
+            let previous = SetWindowLongPtrW(handle, -4, dark_combo_proc as isize);
+            SetWindowLongPtrW(handle, -21, previous);
+        } else if class == "EDIT" {
             SetWindowTheme(handle, wide("DarkMode_Explorer").as_ptr(), null());
         }
         self.controls.push(handle);
@@ -39,7 +43,7 @@ impl Editor {
         self.add("STATIC", text, 0, 0, x, y, 330, 20);
     }
     unsafe fn combo(&mut self, id: isize, x: i32, y: i32, items: &[&str]) {
-        let h = self.add("COMBOBOX", "", 0x00010000 | 0x00200000 | 0x3, id, x, y, 332, 225);
+        let h = self.add("COMBOBOX", "", 0x00010000 | 0x00200000 | 0x3 | 0x10 | 0x200, id, x, y, 332, 225);
         for item in items {
             SendMessageW(h, 0x0143, 0, wide(item).as_ptr() as isize); // CB_ADDSTRING
         }
@@ -51,7 +55,7 @@ impl Editor {
         self.add("EDIT", "", 0x00010000 | 0x00000080 | 0x00800000, id, x, y, 330, 29);
     }
     unsafe fn button(&mut self, id: isize, text: &str, x: i32, y: i32, w: i32) {
-        self.add("BUTTON", text, 0x00010000, id, x, y, w, 33);
+        self.add("BUTTON", text, 0x00010000 | 0xB, id, x, y, w, 33);
     }
     unsafe fn create(&mut self) {
         self.font = CreateFontW(
@@ -185,6 +189,39 @@ impl Editor {
         Some(PathBuf::from(String::from_utf16_lossy(&name[..length])))
     }
 }
+
+unsafe fn draw_settings_button(item: &DrawItem, state: &Editor) {
+    let id = item.control_id;
+    let disabled = item.item_state & 0x0004 != 0;
+    let down = item.item_state & 0x0001 != 0;
+    let focused = item.item_state & 0x0010 != 0;
+    let hovered = item.item_state & 0x0040 != 0;
+    let primary = id == 617;
+    let fill = if disabled {
+        FIELD
+    } else if primary {
+        if down { rgb(94, 72, 192) } else if hovered { rgb(137, 111, 245) } else { ACCENT }
+    } else if down {
+        rgb(54, 50, 61)
+    } else if hovered {
+        rgb(48, 44, 58)
+    } else {
+        FIELD
+    };
+    let outline = if focused { ACCENT } else if primary { ACCENT } else if hovered { rgb(88, 77, 132) } else { BORDER };
+    rounded(item.dc, &item.rect, fill, outline, (8.0 * state.scale).round() as i32);
+    SetBkMode(item.dc, 1);
+    SetTextColor(item.dc, if disabled { MUTED } else { TEXT });
+    let old_font = SelectObject(item.dc, state.font);
+    let label = wide(&get(item.hwnd));
+    let mut text_rect = item.rect;
+    text_rect.left += (7.0 * state.scale).round() as i32;
+    text_rect.right -= (7.0 * state.scale).round() as i32;
+    DrawTextW(item.dc, label.as_ptr(), (label.len() - 1) as i32,
+        &mut text_rect, 0x1 | 0x4 | 0x20 | 0x800 | 0x8000);
+    SelectObject(item.dc, old_font);
+}
+
 unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -> isize {
     if msg == 1 {
         let state = *(l as *const *mut Editor);
@@ -207,13 +244,37 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
             EndPaint(hwnd, &paint);
             0
         }
-        0x0133 | 0x0138 | 0x0134 => {
+        0x0133 | 0x0135 | 0x0138 | 0x0134 => {
             let edit = w != 0 && state.controls.iter().any(|&h| h == l as H && (h == state.child(602) || h == state.child(605)));
             let dc = w as H;
-            SetBkMode(dc, if edit {2} else {1});
+            SetBkMode(dc, 1);
             SetBkColor(dc, if edit {FIELD} else {BG});
             SetTextColor(dc, TEXT);
             if edit {state.field} else {state.bg}
+        }
+        0x002B => { // WM_DRAWITEM
+            if l != 0 {
+                let item = &*(l as *const DrawItem);
+                if item.control_type == 4 && matches!(item.control_id, 614..=617) {
+                    draw_settings_button(item, state);
+                    return 1;
+                }
+                if item.control_type == 2 && matches!(item.control_id, 600..=609) {
+                    draw_combo_item(item, state.font, state.scale);
+                    return 1;
+                }
+            }
+            DefWindowProcW(hwnd, msg, w, l)
+        }
+        0x002C => { // WM_MEASUREITEM
+            if l != 0 {
+                let measure = &mut *(l as *mut MeasureItem);
+                if measure.control_type == 2 && matches!(measure.control_id, 600..=609) {
+                    measure.item_height = (28.0 * state.scale).round() as u32;
+                    return 1;
+                }
+            }
+            DefWindowProcW(hwnd, msg, w, l)
         }
         0x0111 => {
             match w & 0xffff {
