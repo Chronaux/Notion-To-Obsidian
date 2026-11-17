@@ -109,7 +109,10 @@ fn metadata_tags(text: &str) -> Vec<String> {
         .flat_map(|(_, v)| obsidian_tags(v))
         .collect()
 }
-fn remove_tag_lines(text: &str, values: &BTreeMap<String, String>) -> String {
+fn remove_tag_lines(
+    text: &str, values: &BTreeMap<String, String>,
+    is_tag: impl Fn(&str) -> bool,
+) -> String {
     let mut out = String::new();
     for (code, chunk) in code_parts(text) {
         if code {
@@ -121,7 +124,7 @@ fn remove_tag_lines(text: &str, values: &BTreeMap<String, String>) -> String {
                 .trim_end()
                 .split_once(':')
                 .map(|(k, v)| {
-                    is_tag_column(k) && values.get(k).map(|s| norm(s) == norm(v)).unwrap_or(false)
+                    is_tag(k) && values.get(k).map(|s| norm(s) == norm(v)).unwrap_or(false)
                 })
                 .unwrap_or(false);
             if !remove {
@@ -1922,7 +1925,11 @@ impl Converter {
                 .filter(|(k, _)| self.options.is_tag_column(&p.db, k))
                 .map(|(k, v)| (k.to_string(), v.trim().to_string()))
                 .collect::<BTreeMap<_, _>>();
-            body = remove_tag_lines(&body, &top_tags);
+            for value in top_tags.values() {
+                tags.extend(obsidian_tags(value));
+            }
+            body = remove_tag_lines(&body, &top_tags,
+                |k| self.options.is_tag_column(&p.db, k));
             if !p.db.is_empty() {
                 let db = self.dbs.iter().find(|d| d.uid == p.db).unwrap().clone();
                 for (key, value) in &p.row {
@@ -1939,8 +1946,9 @@ impl Converter {
                     .filter(|(k, _)| self.options.is_tag_column(&p.db, k))
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
-                body = if self.options.content.tags == options::Tags::Auto {
-                    remove_tag_lines(&body, &tag_values)
+                body = if self.options.content.tags != options::Tags::Off {
+                    remove_tag_lines(&body, &tag_values,
+                        |k| self.options.is_tag_column(&p.db, k))
                 } else { body };
                 let exported = fields(&p.text, &db.columns);
                 for col in &db.columns {
@@ -2116,7 +2124,12 @@ impl Converter {
             for &pi in &db.pages {
                 table_data["byRowPath"][&self.pages[pi].target] = json!({"titleColumn":title_col});
             }
-            self.report.databases.push(json!({"id":db.uid,"title":db.title,"rows":db.rows.len(),"view_rows":db.view_rows.len(),"base":db.base,"readable_table":db.target,"columns":db.keys}));
+            self.report.databases.push(json!({
+                "id":db.uid,"title":db.title,"rows":db.rows.len(),
+                "view_rows":db.view_rows.len(),
+                "base":if output_mode.bases() {Some(&db.base)} else {None},
+                "readable_table":db.target,"columns":db.keys
+            }));
         }
         let plugin = ".obsidian/plugins/notion-table-copy/";
         if self.options.extras.table_plugin {
