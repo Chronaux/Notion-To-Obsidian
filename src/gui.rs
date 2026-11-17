@@ -58,6 +58,15 @@ struct DrawItem {
     rect: Rect,
     item_data: usize,
 }
+#[repr(C)]
+struct MeasureItem {
+    control_type: u32,
+    control_id: u32,
+    item_id: u32,
+    item_width: u32,
+    item_height: u32,
+    item_data: usize,
+}
 // TOOLINFOW / comctl32 tooltip ABI on Windows x64.
 #[repr(C)]
 struct ToolInfo {
@@ -239,6 +248,10 @@ extern "system" {
     fn EnableWindow(hwnd: H, enable: i32) -> i32;
     fn MoveWindow(hwnd: H, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
     fn GetClientRect(hwnd: H, rect: *mut Rect) -> i32;
+    fn GetDC(hwnd: H) -> H;
+    fn ReleaseDC(hwnd: H, dc: H) -> i32;
+    fn GetDpiForWindow(hwnd: H) -> u32;
+    fn GetFocus() -> H;
     fn GetWindowRect(hwnd: H, rect: *mut Rect) -> i32;
     fn SetWindowPos(hwnd: H, after: H, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
     fn DestroyWindow(hwnd: H) -> i32;
@@ -364,6 +377,104 @@ unsafe fn rounded(dc: H, rect: &Rect, fill: u32, outline: u32, radius: i32) {
     SelectObject(dc, old_brush);
     DeleteObject(pen);
     DeleteObject(brush);
+}
+
+// Owner-drawn combo items use the same palette in the main window and settings.
+unsafe fn draw_combo_item(item: &DrawItem, font: H, scale: f32) {
+    let editing = item.item_state & 0x1000 != 0; // ODS_COMBOBOXEDIT
+    let selected = item.item_state & 0x0001 != 0; // ODS_SELECTED
+    let disabled = item.item_state & 0x0004 != 0; // ODS_DISABLED
+    let fill = if selected && !editing { rgb(58, 50, 84) } else { FIELD };
+    let brush = CreateSolidBrush(fill);
+    FillRect(item.dc, &item.rect, brush);
+    DeleteObject(brush);
+
+    let index = if item.item_id == u32::MAX {
+        SendMessageW(item.hwnd, 0x0147, 0, 0) // CB_GETCURSEL
+    } else {
+        item.item_id as isize
+    };
+    if index >= 0 {
+        let length = SendMessageW(item.hwnd, 0x0149, index as usize, 0) // CB_GETLBTEXTLEN
+            .max(0) as usize;
+        if length > 0 {
+            let mut label = vec![0u16; length + 1];
+            SendMessageW(item.hwnd, 0x0148, index as usize, label.as_mut_ptr() as isize);
+            let old_font = SelectObject(item.dc, font);
+            SetBkMode(item.dc, 1);
+            SetTextColor(item.dc, if disabled { MUTED } else { TEXT });
+            let pad = (10.0 * scale).round() as i32;
+            let mut text = item.rect;
+            text.left += pad;
+            text.right -= (editing as i32) * (28.0 * scale).round() as i32;
+            DrawTextW(item.dc, label.as_ptr(), length as i32, &mut text,
+                0x20 | 0x4 | 0x800 | 0x8000); // single line, centered, no prefix, ellipsis
+            SelectObject(item.dc, old_font);
+        }
+    }
+}
+
+// The system theme can still paint a light arrow/frame even for an owner-drawn
+// combo. Paint that small chrome area after the native control has painted its
+// text; the popup rows themselves are handled by draw_combo_item.
+unsafe fn draw_combo_chrome(hwnd: H) {
+    let dc = GetDC(hwnd);
+    if dc == 0 { return; }
+    let mut rect = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+    GetClientRect(hwnd, &mut rect);
+    let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
+    let p = |n: i32| (n as f32 * scale).round() as i32;
+    let arrow_width = p(26).min(rect.right.max(0));
+    let arrow = Rect {
+        left: (rect.right - arrow_width).max(0),
+        top: 1,
+        right: rect.right.saturating_sub(1),
+        bottom: rect.bottom.saturating_sub(1),
+    };
+    let brush = CreateSolidBrush(FIELD);
+    FillRect(dc, &arrow, brush);
+    DeleteObject(brush);
+
+    let enabled = IsWindowEnabled(hwnd) != 0;
+    let focused = GetFocus() == hwnd;
+    let border = if !enabled { BORDER } else if focused { ACCENT } else { BORDER };
+    let pen = CreatePen(0, p(1).max(1), border);
+    let old_pen = SelectObject(dc, pen);
+    // Outline, arrow separator and chevron.
+    MoveToEx(dc, 0, 0, null_mut()); LineTo(dc, rect.right - 1, 0);
+    LineTo(dc, rect.right - 1, rect.bottom - 1);
+    LineTo(dc, 0, rect.bottom - 1);
+    LineTo(dc, 0, 0);
+    MoveToEx(dc, arrow.left, p(5), null_mut());
+    LineTo(dc, arrow.left, rect.bottom - p(5));
+    let cx = arrow.left + arrow_width / 2;
+    let cy = rect.bottom / 2;
+    let half = p(4);
+    MoveToEx(dc, cx - half, cy - p(2), null_mut());
+    LineTo(dc, cx, cy + p(2));
+    LineTo(dc, cx + half, cy - p(2));
+    SelectObject(dc, old_pen);
+    DeleteObject(pen);
+    ReleaseDC(hwnd, dc);
+}
+
+// Store the original WNDPROC in this control's GWLP_USERDATA. This is isolated
+// per combo and leaves the parent dialog's own state untouched.
+unsafe extern "system" fn dark_combo_proc(hwnd: H, msg: u32, w: usize, l: isize) -> isize {
+    let previous = GetWindowLongPtrW(hwnd, -21);
+    let result = if previous != 0 {
+        CallWindowProcW(previous, hwnd, msg, w, l)
+    } else {
+        DefWindowProcW(hwnd, msg, w, l)
+    };
+    match msg {
+        0x000F => draw_combo_chrome(hwnd), // WM_PAINT
+        0x0007 | 0x0008 | 0x000A | 0x0201 | 0x0202 => {
+            InvalidateRect(hwnd, null(), 0);
+        }
+        _ => {}
+    }
+    result
 }
 
 
@@ -621,7 +732,7 @@ impl App {
             ("BUTTON", "Пропускать отсутствующие страницы", 0x10000, 110),
             ("BUTTON", "Справка по ZIP", 0x10000, 112),
             ("STATIC", "Профиль экспорта", 0, 0),
-            ("COMBOBOX", "", 0x10000 | 0x00200000 | 0x3, 118),
+            ("COMBOBOX", "", 0x10000 | 0x00200000 | 0x3 | 0x10 | 0x200, 118),
             ("BUTTON", "Настроить…", 0x10000, 119),
             ("BUTTON", "Предпросмотр", 0x10000, 120),
         ];
@@ -643,6 +754,8 @@ impl App {
         }
         SendMessageW(self.controls[18], 0x014E, 1, 0);
         SetWindowTheme(self.controls[18], wide("DarkMode_Explorer").as_ptr(), null());
+        let combo_previous = SetWindowLongPtrW(self.controls[18], -4, dark_combo_proc as isize);
+        SetWindowLongPtrW(self.controls[18], -21, combo_previous);
         let default = std::env::var_os("USERPROFILE")
             .map(PathBuf::from).unwrap_or(PathBuf::from("."))
             .join("Documents").join("Notion_Obsidian");
@@ -1190,6 +1303,20 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                 let item = &*(l as *const DrawItem);
                 if item.control_type == 4 {
                     draw_button(item, app);
+                    return 1;
+                }
+                if item.control_type == 2 && item.control_id == 118 {
+                    draw_combo_item(item, app.font, app.scale);
+                    return 1;
+                }
+            }
+            DefWindowProcW(hwnd, msg, w, l)
+        }
+        0x2c => { // WM_MEASUREITEM
+            if l != 0 {
+                let measure = &mut *(l as *mut MeasureItem);
+                if measure.control_type == 2 && measure.control_id == 118 {
+                    measure.item_height = (28.0 * app.scale).round() as u32;
                     return 1;
                 }
             }
