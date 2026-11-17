@@ -140,10 +140,47 @@ fn output_folder_is_the_vault_root() {
     convert(&p, &out).unwrap();
     assert!(out.join("Root.md").is_file());
     assert!(out.join(".obsidian/app.json").is_file());
+    assert!(out.join("Отчёт о переносе.md").is_file());
     assert!(out.join(".notion-to-obsidian/migration-report.json").is_file());
     assert!(out.join(".notion-to-obsidian/import-state.json").is_file());
     assert!(!out.join("Vault").exists());
     assert!(!out.join("migration-report.json").exists());
+}
+
+#[test]
+fn report_disabled_omits_both_files_and_keeps_vault_state() {
+    let t = root();
+    let p = archive(t.path(), vec![s(format!("Root {A}.md"), "# Root")]);
+    let out = t.path().join("no_report");
+    let report = Converter::new(|_| {}, Arc::new(AtomicBool::new(false)))
+        .write_report(false)
+        .run(&p, &out)
+        .unwrap();
+    assert_eq!(report.audit["passed"], true);
+    assert_eq!(report.stats["source_pages"], 1);
+    assert!(out.join("Root.md").is_file());
+    assert!(out.join("Начать здесь.md").is_file());
+    assert!(out.join(".obsidian/app.json").is_file());
+    assert!(!out.join("Отчёт о переносе.md").exists());
+    assert!(!out.join(".notion-to-obsidian/migration-report.json").exists());
+    assert!(out.join(".notion-to-obsidian/import-state.json").is_file());
+}
+
+#[test]
+fn report_enabled_writes_markdown_and_diagnostic_json() {
+    let t = root();
+    let p = archive(t.path(), vec![s(format!("Root {A}.md"), "# Root")]);
+    let out = t.path().join("with_report");
+    let report = Converter::new(|_| {}, Arc::new(AtomicBool::new(false)))
+        .write_report(true)
+        .run(&p, &out)
+        .unwrap();
+    assert!(out.join("Отчёт о переносе.md").is_file());
+    let json: serde_json::Value = serde_json::from_slice(
+        &fs::read(out.join(".notion-to-obsidian/migration-report.json")).unwrap()
+    ).unwrap();
+    assert_eq!(json["audit"], report.audit);
+    assert!(out.join(".notion-to-obsidian/import-state.json").is_file());
 }
 
 #[test]

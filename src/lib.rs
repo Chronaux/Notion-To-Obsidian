@@ -573,6 +573,7 @@ pub struct Converter {
     section_nodes: BTreeMap<String, Vec<usize>>,
     pub report: Report,
     skip_missing_pages: bool,
+    write_report: bool,
     cancel: Arc<AtomicBool>,
     progress: Box<dyn Fn(&str) + Send>,
 }
@@ -589,8 +590,9 @@ impl Converter {
             output: BTreeMap::new(),
             section_nodes: BTreeMap::new(),
             skip_missing_pages: false,
+            write_report: true, // Preserve existing CLI/library behavior.
             report: Report {
-                version: "0.5.12".into(),
+                version: "0.5.13".into(),
                 ..Default::default()
             },
             cancel,
@@ -601,6 +603,12 @@ impl Converter {
     /// Enable this only when the user has verified that missing pages may be omitted.
     pub fn skip_missing_pages(mut self, skip: bool) -> Self {
         self.skip_missing_pages = skip;
+        self
+    }
+    /// Persist the Markdown and JSON migration reports when enabled.
+    /// Auditing and the technical import-state.json remain independent.
+    pub fn write_report(mut self, enabled: bool) -> Self {
+        self.write_report = enabled;
         self
     }
     fn check(&self) -> Result<()> {
@@ -2085,7 +2093,7 @@ impl Converter {
             "block_link_fallbacks".into(),
             self.report.block_link_fallbacks.len(),
         );
-        let home=format!("# Обзор экспорта Notion → Obsidian\n\nОткройте эту папку как хранилище. Основной вид — таблицы с полным текстом; для фильтрации доступны **Bases / Базы**.\n\n## Главная страница\n\n{}\n\n## Базы\n\n{}\n\n## Как пользоваться\n\n- Поиск по содержимому: Ctrl+Shift+F.\n- Переход к заметке: Ctrl+O.\n- Полные ответы видны на страницах таблиц и в отдельных заметках.\n- Копирование одним кликом: Настройки → Сторонние плагины → включите Notion Full Tables. Плагин уже находится в этом хранилище; скачивать его не нужно.\n- В Bases после включения плагина доступен вид «Полный текст · копировать».\n- Теги сохранены в стандартном свойстве tags. Пробелы в тегах заменены подчёркиваниями.\n- Экспортированный вид — снимок состава строк.\n- Недостающие страницы обозначены заглушками, если не включён ручной пропуск.\n- Ссылки на точные блоки Notion без экспортированного адреса открывают соответствующую страницу; исходные ссылки перечислены в отчёте.\n- Повторный запуск создаёт отдельное хранилище, без слияния локальных правок.\n",self.pages.iter().filter(|p|!p.source.contains('/')).map(|p|format!("- {}",Self::wiki(&p.target,&p.title,false,false,""))).collect::<Vec<_>>().join("\n"),self.dbs.iter().map(|d|format!("- {}",Self::wiki(&d.target,&d.title,false,false,""))).collect::<Vec<_>>().join("\n"));
+        let home=format!("# Обзор экспорта Notion → Obsidian\n\nОткройте эту папку как хранилище. Основной вид — таблицы с полным текстом; для фильтрации доступны **Bases / Базы**.\n\n## Главная страница\n\n{}\n\n## Базы\n\n{}\n\n## Как пользоваться\n\n- Поиск по содержимому: Ctrl+Shift+F.\n- Переход к заметке: Ctrl+O.\n- Полные ответы видны на страницах таблиц и в отдельных заметках.\n- Копирование одним кликом: Настройки → Сторонние плагины → включите Notion Full Tables. Плагин уже находится в этом хранилище; скачивать его не нужно.\n- В Bases после включения плагина доступен вид «Полный текст · копировать».\n- Теги сохранены в стандартном свойстве tags. Пробелы в тегах заменены подчёркиваниями.\n- Экспортированный вид — снимок состава строк.\n- Недостающие страницы обозначены заглушками, если не включён ручной пропуск.\n- Ссылки на точные блоки Notion без экспортированного адреса открывают соответствующую страницу; исходные адреса сохраняются при включённом отчёте о переносе.\n- Повторный запуск создаёт отдельное хранилище, без слияния локальных правок.\n",self.pages.iter().filter(|p|!p.source.contains('/')).map(|p|format!("- {}",Self::wiki(&p.target,&p.title,false,false,""))).collect::<Vec<_>>().join("\n"),self.dbs.iter().map(|d|format!("- {}",Self::wiki(&d.target,&d.title,false,false,""))).collect::<Vec<_>>().join("\n"));
         self.output
             .insert("Начать здесь.md".into(), home.into_bytes());
         Ok(())
@@ -2296,9 +2304,11 @@ impl Converter {
         self.paths(&files);
         self.render(&files)?;
         self.audit(&files)?;
-        let summary=format!("# Отчёт о переносе\n\n- Исходных страниц: **{}**\n- Записей баз: **{}**\n- Баз: **{}**\n- Вложений: **{}**\n- Недостающих страниц: **{}**\n- Пропущенных вручную страниц Notion: **{}**\n- Ссылок на отдельные блоки без точной позиции: **{}** (исходные URL сохранены в отчёте)\n\nСтруктурный аудит: **пройден**. Внутренние ссылки разрешаются, контрольные суммы вложений совпадают.\n\nПредупреждений: {}. Подробности и исходные адреса — в .notion-to-obsidian/migration-report.json.\n",self.report.stats["source_pages"],self.report.stats["source_rows"],self.dbs.len(),self.assets.len(),self.report.missing_pages.len(),self.report.skipped_pages.len(),self.report.block_link_fallbacks.len(),self.report.warnings.len());
-        self.output
-            .insert("Отчёт о переносе.md".into(), summary.into_bytes());
+        if self.write_report {
+            let summary=format!("# Отчёт о переносе\n\n- Исходных страниц: **{}**\n- Записей баз: **{}**\n- Баз: **{}**\n- Вложений: **{}**\n- Недостающих страниц: **{}**\n- Пропущенных вручную страниц Notion: **{}**\n- Ссылок на отдельные блоки без точной позиции: **{}** (исходные URL сохранены в отчёте)\n\nСтруктурный аудит: **пройден**. Внутренние ссылки разрешаются, контрольные суммы вложений совпадают.\n\nПредупреждений: {}. Подробности и исходные адреса — в .notion-to-obsidian/migration-report.json.\n",self.report.stats["source_pages"],self.report.stats["source_rows"],self.dbs.len(),self.assets.len(),self.report.missing_pages.len(),self.report.skipped_pages.len(),self.report.block_link_fallbacks.len(),self.report.warnings.len());
+            self.output
+                .insert("Отчёт о переносе.md".into(), summary.into_bytes());
+        }
         (self.progress)("Сохранение хранилища…");
         let parent = destination
             .parent()
@@ -2319,12 +2329,13 @@ impl Converter {
             }
         }
         fs::create_dir_all(stage.path().join(".notion-to-obsidian")).map_err(|e| e.to_string())?;
-        fs::write(
-            stage.path().join(".notion-to-obsidian/migration-report.json"),
-            pretty(&self.report),
-        )
-        .map_err(|e| e.to_string())?;
-        let state = json!({"version":"0.5.12","archive_sha256":hash(fs::read(archive).map_err(|e|e.to_string())?),"pages":self.pages.iter().map(|p|(p.uid.clone(),json!({"path":p.target,"source_sha256":hash(&p.text),"output_sha256":hash(&self.output[&p.target]),"database_id":p.db,"row_order":p.order,"view_order":p.view_order}))).collect::<BTreeMap<_,_>>()});
+        if self.write_report {
+            fs::write(
+                stage.path().join(".notion-to-obsidian/migration-report.json"),
+                pretty(&self.report),
+            ).map_err(|e| e.to_string())?;
+        }
+        let state = json!({"version":"0.5.13","archive_sha256":hash(fs::read(archive).map_err(|e|e.to_string())?),"pages":self.pages.iter().map(|p|(p.uid.clone(),json!({"path":p.target,"source_sha256":hash(&p.text),"output_sha256":hash(&self.output[&p.target]),"database_id":p.db,"row_order":p.order,"view_order":p.view_order}))).collect::<BTreeMap<_,_>>()});
         fs::write(stage.path().join(".notion-to-obsidian/import-state.json"), pretty(&state))
             .map_err(|e| e.to_string())?;
         fs::write(stage.path().join(".notion-to-obsidian/Открыть.txt"),"В Obsidian откройте папку результата как хранилище. Включите встроенный модуль Bases. Начните с заметки «Начать здесь».\n").map_err(|e|e.to_string())?;
