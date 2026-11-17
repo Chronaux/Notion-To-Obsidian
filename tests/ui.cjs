@@ -116,7 +116,7 @@ assert.match(gui, /draw_combo_chrome\(hwnd\)/);
 // Repaint that client-area boundary (plus the outer edges) after WM_PAINT;
 // a window DC / WM_NCPAINT overlay cannot reach this inner frame.
 assert.match(gui, /unsafe fn draw_combo_frame\(dc: H, rect: &Rect, divider: i32, color: u32, thickness: i32\)/);
-assert.match(gui, /Rect \\{ left: split - t, top: t, right: split, bottom: rect\.bottom - t \\}/);
+assert.match(gui, /Rect \{ left: split - t, top: t, right: split, bottom: rect\.bottom - t \}/);
 assert.match(gui, /draw_combo_frame\(dc, &rect, arrow_left, border, thickness\)/);
 assert.match(gui, /0x000F => draw_combo_chrome\(hwnd\)/);
 assert.doesNotMatch(gui, /GetWindowDC|draw_combo_nonclient_frame/);
