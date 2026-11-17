@@ -117,16 +117,63 @@ struct OpenFile {
     reserved2: u32,
     flags_ex: u32,
 }
+// Native Explorer-style folder picker (IFileDialog with FOS_PICKFOLDERS).
+// The vtables below follow the Windows SDK COM method order for x64.
 #[repr(C)]
-struct Browse {
-    owner: H,
-    root: *const c_void,
-    display: *mut u16,
-    title: *const u16,
-    flags: u32,
-    callback: usize,
-    param: isize,
-    image: i32,
+struct Guid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
+const CLSID_FILE_OPEN_DIALOG: Guid = Guid {
+    data1: 0xdc1c5a9c, data2: 0xe88a, data3: 0x4dde,
+    data4: [0xa5, 0xa1, 0x60, 0xf8, 0x2a, 0x20, 0xae, 0xf7],
+};
+const IID_IFILE_DIALOG: Guid = Guid {
+    data1: 0x42f85136, data2: 0xdb7e, data3: 0x439c,
+    data4: [0x85, 0xf1, 0xe4, 0x07, 0x5d, 0x13, 0x5f, 0xc8],
+};
+#[repr(C)]
+struct FileDialog {
+    vtable: *const FileDialogVTable,
+}
+#[repr(C)]
+struct FileDialogVTable {
+    query_interface: usize,
+    add_ref: usize,
+    release: unsafe extern "system" fn(*mut FileDialog) -> u32,
+    show: unsafe extern "system" fn(*mut FileDialog, H) -> i32,
+    set_file_types: usize,
+    set_file_type_index: usize,
+    get_file_type_index: usize,
+    advise: usize,
+    unadvise: usize,
+    set_options: unsafe extern "system" fn(*mut FileDialog, u32) -> i32,
+    get_options: unsafe extern "system" fn(*mut FileDialog, *mut u32) -> i32,
+    set_default_folder: usize,
+    set_folder: usize,
+    get_folder: usize,
+    get_current_selection: usize,
+    set_file_name: usize,
+    get_file_name: usize,
+    set_title: unsafe extern "system" fn(*mut FileDialog, *const u16) -> i32,
+    set_ok_button_label: unsafe extern "system" fn(*mut FileDialog, *const u16) -> i32,
+    set_file_name_label: usize,
+    get_result: unsafe extern "system" fn(*mut FileDialog, *mut *mut ShellItem) -> i32,
+}
+#[repr(C)]
+struct ShellItem {
+    vtable: *const ShellItemVTable,
+}
+#[repr(C)]
+struct ShellItemVTable {
+    query_interface: usize,
+    add_ref: usize,
+    release: unsafe extern "system" fn(*mut ShellItem) -> u32,
+    bind_to_handler: usize,
+    get_parent: usize,
+    get_display_name: unsafe extern "system" fn(*mut ShellItem, u32, *mut *mut u16) -> i32,
 }
 #[link(name = "user32")]
 extern "system" {
@@ -163,6 +210,7 @@ extern "system" {
     fn SetWindowTextW(hwnd: H, text: *const u16) -> i32;
     fn GetWindowTextLengthW(hwnd: H) -> i32;
     fn GetWindowTextW(hwnd: H, text: *mut u16, max: i32) -> i32;
+    fn IsWindowEnabled(hwnd: H) -> i32;
     fn EnableWindow(hwnd: H, enable: i32) -> i32;
     fn MoveWindow(hwnd: H, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
     fn GetClientRect(hwnd: H, rect: *mut Rect) -> i32;
@@ -233,8 +281,6 @@ extern "system" {
 }
 #[link(name = "shell32")]
 extern "system" {
-    fn SHBrowseForFolderW(info: *mut Browse) -> *mut c_void;
-    fn SHGetPathFromIDListW(id: *const c_void, path: *mut u16) -> i32;
     fn ShellExecuteW(
         hwnd: H,
         op: *const u16,
@@ -250,6 +296,8 @@ extern "system" {
 #[link(name = "ole32")]
 extern "system" {
     fn CoInitializeEx(ptr: *mut c_void, flags: u32) -> i32;
+    fn CoCreateInstance(clsid: *const Guid, outer: *mut c_void, context: u32,
+        iid: *const Guid, object: *mut *mut c_void) -> i32;
     fn CoTaskMemFree(ptr: *mut c_void);
     fn CoUninitialize();
 }
@@ -329,6 +377,7 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
 unsafe fn draw_button(item: &DrawItem, app: &App) {
     let id = item.control_id;
     let browse = id == 102 || id == 104;
+    let hovered = app.hover_button == Some(id);
     FillRect(item.dc, &item.rect,
         if browse { app.field_brush } else { app.bg_brush });
     let disabled = item.item_state & 0x4 != 0;
@@ -339,8 +388,7 @@ unsafe fn draw_button(item: &DrawItem, app: &App) {
     let foreground = if disabled { rgb(114, 111, 121) } else { TEXT };
 
     if browse {
-        let hovered = app.hover_browse == Some(if id == 102 { 0 } else { 1 });
-        let x = (item.rect.left + item.rect.right) / 2;
+        let x = item.rect.left + (18.0 * app.scale).round() as i32;
         let y = (item.rect.top + item.rect.bottom) / 2;
         let z = app.scale;
         let p = |n: i32| (n as f32 * z).round() as i32;
@@ -377,6 +425,15 @@ unsafe fn draw_button(item: &DrawItem, app: &App) {
         LineTo(item.dc, x - p(9), y - p(3));
         SelectObject(item.dc, previous);
         DeleteObject(pen);
+        SetBkMode(item.dc, 1);
+        SetTextColor(item.dc, if disabled { MUTED } else { TEXT });
+        let old = SelectObject(item.dc, app.font);
+        let caption = wide("Обзор");
+        let mut label_rect = item.rect;
+        label_rect.left += p(33);
+        DrawTextW(item.dc, caption.as_ptr(), (caption.len() - 1) as i32,
+            &mut label_rect, 0x20 | 0x4 | 0x8000);
+        SelectObject(item.dc, old);
         return;
     }
 
@@ -413,12 +470,15 @@ unsafe fn draw_button(item: &DrawItem, app: &App) {
     }
 
     let (fill, stroke) = if primary && !disabled {
-        (if down { rgb(100, 76, 207) } else { ACCENT }, ACCENT)
+        (if down { rgb(100, 76, 207) } else if hovered {
+            rgb(137, 111, 245)
+        } else { ACCENT }, ACCENT)
     } else if id == 109 {
-        (rgb(34, 31, 46), if focused { ACCENT } else { BORDER })
+        (if hovered { rgb(55, 48, 79) } else { rgb(34, 31, 46) },
+         if focused || hovered { ACCENT } else { BORDER })
     } else {
-        (if down { FIELD } else { BG },
-         if focused { ACCENT } else { BORDER })
+        (if down { FIELD } else if hovered { rgb(43, 40, 53) } else { BG },
+         if focused { ACCENT } else if hovered { rgb(94, 81, 156) } else { BORDER })
     };
     let radius = (15.0 * app.scale).round() as i32;
     rounded(item.dc, &item.rect, if disabled { BG } else { fill },
@@ -452,8 +512,8 @@ struct App {
     titlefont: H,
     bg_brush: H,
     field_brush: H,
-    browse_procs: [isize; 2],
-    hover_browse: Option<usize>,
+    button_procs: [isize; 5],
+    hover_button: Option<u32>,
     skip_missing: bool,
     open_ready: bool,
     rx: Option<Receiver<Event>>,
@@ -484,18 +544,18 @@ impl App {
         let defs = [
             ("STATIC", "Notion → Obsidian", 0u32, 0),
             ("STATIC", "Локально · без установки", 0x2, 0),
-            ("STATIC", "Экспорт Notion", 0, 0),
+            ("STATIC", "ZIP-экспорт Notion", 0, 0),
             ("EDIT", "", 0x80 | 0x10000, 101),
             ("BUTTON", "Выбрать ZIP", 0x10000, 102),
-            ("STATIC", "Папка хранилища Obsidian", 0, 0),
+            ("STATIC", "Новое хранилище Obsidian", 0, 0),
             ("EDIT", "", 0x80 | 0x10000, 103),
             ("BUTTON", "Выбрать папку", 0x10000, 104),
             ("STATIC", "", 0, 0),
             ("BUTTON", "Проверить ZIP", 0x10000, 105),
             ("BUTTON", "Конвертировать", 0x10000, 106),
             ("STATIC", "", 0, 0),
-            ("STATIC", "Готово к конвертации", 0, 0),
-            ("STATIC", "Исходные файлы останутся без изменений", 0, 0),
+            ("STATIC", "Выберите ZIP-экспорт Notion", 0, 0),
+            ("STATIC", "Результат будет создан в новой папке; исходники не изменятся", 0x4000, 0),
             ("BUTTON", "Открыть папку", 0x10000, 109),
             ("BUTTON", "Пропускать отсутствующие страницы", 0x10000, 110),
         ];
@@ -514,8 +574,11 @@ impl App {
         }
         let default = std::env::var_os("USERPROFILE")
             .map(PathBuf::from).unwrap_or(PathBuf::from("."))
-            .join("Documents").join("Notion_Obsidian_v0.5.10");
+            .join("Documents").join("Notion_Obsidian");
         set(self.controls[6], &fresh_path(default).to_string_lossy());
+        // EM_SETCUEBANNER: a visible hint when the ZIP path is empty.
+        SendMessageW(self.controls[3], 0x1501, 0,
+            wide("Нажмите «Обзор» или перетащите ZIP").as_ptr() as isize);
         ShowWindow(self.controls[8], 0);
         ShowWindow(self.controls[11], 0);
         ShowWindow(self.controls[14], 0);
@@ -523,10 +586,10 @@ impl App {
             SendMessageW(self.controls[i], 0x00D3, 3, (14 << 16) | 14);
             SetWindowTheme(self.controls[i], wide("DarkMode_Explorer").as_ptr(), null());
         }
-        // Browse controls have native hover tracking and a pointing-hand cursor.
-        for (slot, index) in [4usize, 7].iter().enumerate() {
-            self.browse_procs[slot] =
-                SetWindowLongPtrW(self.controls[*index], -4, browse_proc as isize);
+        // Hover feedback and a pointing-hand cursor for every action button.
+        for (slot, index) in [4usize, 7, 9, 10, 14].iter().enumerate() {
+            self.button_procs[slot] =
+                SetWindowLongPtrW(self.controls[*index], -4, button_proc as isize);
         }
         DragAcceptFiles(self.hwnd, 1);
         SetTimer(self.hwnd, 1, 33, 0);
@@ -542,17 +605,18 @@ impl App {
         let roww = w - 2 * m;
         let action_gap = v(10);
         let check_w = ((roww - action_gap) * 34 / 100).max(v(180));
-        let input_w = (roww - v(68)).max(v(180));
+        let browse_w = v(88);
+        let input_w = (roww - browse_w - v(14)).max(v(180));
         let status_w = (roww - v(188)).max(v(280));
         let rows = [
             (m, v(14), roww * 60 / 100, v(28)),  // App title
             (w - m - v(245), v(17), v(245), v(24)), // Privacy note
             (m, v(75), roww, v(22)),             // ZIP label
-            (m + v(12), v(105), input_w - v(4), v(40)), // ZIP: full-height edit for vertical centering
-            (w - m - v(47), v(110), v(38), v(30)), // ZIP chooser
+            (m + v(12), v(105), input_w - v(8), v(40)), // ZIP: vertically centered native edit
+            (w - m - browse_w - v(6), v(108), browse_w, v(34)), // ZIP chooser
             (m, v(154), roww, v(22)),             // Output label
-            (m + v(12), v(185), input_w - v(4), v(40)), // Output: full-height edit
-            (w - m - v(47), v(190), v(38), v(30)), // Output chooser
+            (m + v(12), v(185), input_w - v(8), v(40)), // Output: vertically centered native edit
+            (w - m - browse_w - v(6), v(188), browse_w, v(34)), // Output chooser
             (0, 0, 0, 0),                         // unused
             (m, v(281), check_w, v(49)),         // Secondary action
             (m + check_w + action_gap, v(281), roww - check_w - action_gap, v(49)),
@@ -585,8 +649,8 @@ impl App {
 
     unsafe fn set_busy(&mut self, busy: bool) {
         self.busy = busy;
-        self.hover_browse = None;
-        for i in [4usize, 7] {
+        self.hover_button = None;
+        for i in [4usize, 7, 9, 10, 14] {
             InvalidateRect(self.controls[i], null(), 0);
         }
         for i in [3, 4, 6, 7, 9, 15] {
@@ -770,38 +834,58 @@ impl App {
         if GetOpenFileNameW(&mut of) != 0 {
             let end = file.iter().position(|&x| x == 0).unwrap();
             set(self.controls[3], &String::from_utf16_lossy(&file[..end]));
+            set(self.controls[12], "Архив выбран");
+            set(self.controls[13], "Проверьте ZIP или запустите конвертацию");
         }
         SetFocus(self.hwnd);
     }
     unsafe fn choose_output(&self) {
-        let mut display = vec![0u16; 260];
-        let title = wide("Выберите папку, внутри которой будет создан новый результат");
-        let mut b = Browse {
-            owner: self.hwnd,
-            root: null(),
-            display: display.as_mut_ptr(),
-            title: title.as_ptr(),
-            flags: 0x40 | 1,
-            callback: 0,
-            param: 0,
-            image: 0,
-        };
-        let pidl = SHBrowseForFolderW(&mut b);
-        if !pidl.is_null() {
-            let mut buf = vec![0u16; 32768];
-            if SHGetPathFromIDListW(pidl, buf.as_mut_ptr()) != 0 {
-                let end = buf.iter().position(|&x| x == 0).unwrap();
-                let path = fresh_path(
-                    PathBuf::from(String::from_utf16_lossy(&buf[..end]))
-                        .join("Notion_Obsidian_v0.5.10"),
-                );
-                set(self.controls[6], &path.to_string_lossy());
-            }
-            CoTaskMemFree(pidl);
+        // The legacy SHBrowseForFolder tree did not behave like File Explorer.
+        // IFileDialog with FOS_PICKFOLDERS uses the current Windows Explorer UI.
+        let mut object: *mut c_void = null_mut();
+        if CoCreateInstance(&CLSID_FILE_OPEN_DIALOG, null_mut(), 1,
+            &IID_IFILE_DIALOG, &mut object) < 0 || object.is_null()
+        {
+            dialog(self.hwnd, "Не удалось открыть системный выбор папки.");
+            return;
         }
+        let picker = object as *mut FileDialog;
+        let methods = &*(*picker).vtable;
+        let mut options = 0u32;
+        // FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST
+        if (methods.get_options)(picker, &mut options) < 0 ||
+            (methods.set_options)(picker, options | 0x20 | 0x40 | 0x800) < 0
+        {
+            dialog(self.hwnd, "Не удалось настроить выбор папки.");
+        } else {
+            (methods.set_title)(picker, wide("Выберите папку для нового хранилища").as_ptr());
+            (methods.set_ok_button_label)(picker, wide("Выбрать").as_ptr());
+            if (methods.show)(picker, self.hwnd) >= 0 {
+                let mut item: *mut ShellItem = null_mut();
+                if (methods.get_result)(picker, &mut item) >= 0 && !item.is_null() {
+                    let item_methods = &*(*item).vtable;
+                    let mut path: *mut u16 = null_mut();
+                    // SIGDN_FILESYSPATH: produce a real file-system path.
+                    if (item_methods.get_display_name)(item, 0x80058000, &mut path) >= 0
+                        && !path.is_null()
+                    {
+                        let mut len = 0;
+                        while len < 32768 && *path.add(len) != 0 { len += 1; }
+                        let folder = PathBuf::from(String::from_utf16_lossy(
+                            std::slice::from_raw_parts(path, len),
+                        ));
+                        let target = fresh_path(folder.join("Notion_Obsidian"));
+                        set(self.controls[6], &target.to_string_lossy());
+                        set(self.controls[13], "Будет создана новая папка; существующие файлы не затрагиваются");
+                        CoTaskMemFree(path as *mut c_void);
+                    }
+                    (item_methods.release)(item);
+                }
+            }
+        }
+        (methods.release)(picker);
         SetFocus(self.hwnd);
-    }
-}
+    }}
 fn fresh_path(path: PathBuf) -> PathBuf {
     if !path.exists() {
         return path;
@@ -816,19 +900,22 @@ fn fresh_path(path: PathBuf) -> PathBuf {
     }
     unreachable!()
 }
-// Subclass only the two folder buttons, keeping every other control native.
-unsafe extern "system" fn browse_proc(hwnd: H, msg: u32, w: usize, l: isize) -> isize {
+// Subclass action buttons only; keep edit fields and the checkbox native.
+unsafe extern "system" fn button_proc(hwnd: H, msg: u32, w: usize, l: isize) -> isize {
     let parent = GetParent(hwnd);
     let ptr = GetWindowLongPtrW(parent, -21) as *mut App;
     if ptr.is_null() { return DefWindowProcW(hwnd, msg, w, l); }
     let app = &mut *ptr;
-    let slot = if hwnd == app.controls[4] { 0 }
-        else if hwnd == app.controls[7] { 1 }
+    let (slot, id) = if hwnd == app.controls[4] { (0, 102) }
+        else if hwnd == app.controls[7] { (1, 104) }
+        else if hwnd == app.controls[9] { (2, 105) }
+        else if hwnd == app.controls[10] { (3, 106) }
+        else if hwnd == app.controls[14] { (4, 109) }
         else { return DefWindowProcW(hwnd, msg, w, l); };
     match msg {
-        0x0200 if !app.busy => { // WM_MOUSEMOVE
-            if app.hover_browse != Some(slot) {
-                app.hover_browse = Some(slot);
+        0x0200 if IsWindowEnabled(hwnd) != 0 => { // WM_MOUSEMOVE
+            if app.hover_button != Some(id) {
+                app.hover_button = Some(id);
                 let mut track = TrackMouse {
                     size: std::mem::size_of::<TrackMouse>() as u32,
                     flags: 0x2, // TME_LEAVE
@@ -840,18 +927,18 @@ unsafe extern "system" fn browse_proc(hwnd: H, msg: u32, w: usize, l: isize) -> 
             }
         }
         0x02A3 => { // WM_MOUSELEAVE
-            if app.hover_browse == Some(slot) {
-                app.hover_browse = None;
+            if app.hover_button == Some(id) {
+                app.hover_button = None;
                 InvalidateRect(hwnd, null(), 0);
             }
         }
-        0x0020 if !app.busy => { // WM_SETCURSOR
+        0x0020 if IsWindowEnabled(hwnd) != 0 => { // WM_SETCURSOR
             SetCursor(LoadCursorW(0, 32649usize as *const u16)); // IDC_HAND
             return 1;
         }
         _ => {}
     }
-    let previous = app.browse_procs[slot];
+    let previous = app.button_procs[slot];
     if previous == 0 { DefWindowProcW(hwnd, msg, w, l) }
     else { CallWindowProcW(previous, hwnd, msg, w, l) }
 }
@@ -1019,8 +1106,8 @@ pub fn launch(archive: Option<PathBuf>) {
             titlefont: 0,
             bg_brush: 0,
             field_brush: 0,
-            browse_procs: [0; 2],
-            hover_browse: None,
+            button_procs: [0; 5],
+            hover_button: None,
             skip_missing: true,
             open_ready: false,
             rx: None,
@@ -1085,5 +1172,5 @@ pub fn launch(archive: Option<PathBuf>) {
 const _: [(); 80] = [(); std::mem::size_of::<Class>()];
 const _: [(); 48] = [(); std::mem::size_of::<Msg>()];
 const _: [(); 152] = [(); std::mem::size_of::<OpenFile>()];
-const _: [(); 64] = [(); std::mem::size_of::<Browse>()];
+const _: [(); 16] = [(); std::mem::size_of::<Guid>()];
 const _: [(); 64] = [(); std::mem::size_of::<DrawItem>()];
