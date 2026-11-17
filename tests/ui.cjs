@@ -84,74 +84,26 @@ assert.match(editor, /GetSaveFileNameW/);
 assert.match(core, /pub fn preview\(/);
 assert.match(core, /self\.options\.validate\(\)\?/);
 const settingsUi = fs.readFileSync('src/settings.rs', 'utf8');
-// Both combo boxes are owner-drawn and their frame/arrow are painted in the
-// same dark palette; settings action buttons are owner-drawn as well.
-assert.match(gui, /0x3 \| 0x10 \| 0x200/);
-assert.match(gui, /draw_combo_item\(item, app\.font, app\.scale\)/);
-// Regression: ODT_COMBOBOX is 3; using ODT_LISTBOX (2) left the entire
-// popup blank and removed the selected profile text in v0.6.1.
-assert.match(gui, /item\.control_type == 3 && item\.control_id == 118/);
-assert.match(gui, /measure\.control_type == 3 && measure\.control_id == 118/);
-assert.doesNotMatch(gui, /item\.control_type == 2 && item\.control_id == 118/);
-assert.match(gui, /0x133 \| 0x134 \| 0x138/);
-assert.match(gui, /unsafe extern "system" fn dark_combo_proc/);
-assert.match(gui, /fn EnumChildWindows\(hwnd: H, callback: Option<unsafe extern "system" fn\(H, isize\) -> i32>, param: isize\) -> i32/);
-assert.match(gui, /fn GetClassNameW\(hwnd: H, class_name: \*mut u16, max: i32\) -> i32/);
-// CBS_DROPDOWNLIST has an internal EDIT/STATIC display child. Theme it too
-// and remove its default 3D border so it cannot leave a white inset frame.
-assert.match(gui, /unsafe extern "system" fn theme_combo_child/);
-assert.match(gui, /eq_ignore_ascii_case\("EDIT"\) \|\| class_name\.eq_ignore_ascii_case\("STATIC"\)/);
-assert.match(gui, /style & !0x00800000/);
-assert.match(gui, /SetWindowTheme\(hwnd, wide\(""\)\.as_ptr\(\), wide\(""\)\.as_ptr\(\)\)/);
-assert.match(gui, /ex_style & !\(0x00000200 \| 0x00020000\)/);
-assert.match(gui, /SetWindowPos\(hwnd, 0, 0, 0, 0, 0, 0x37\)/);
-assert.match(gui, /EnumChildWindows\(hwnd, Some\(theme_combo_child\), 0\)/);
-assert.match(gui, /unsafe fn is_combo_descendant\(hwnd: H, combo: H\) -> bool/);
-assert.match(gui, /is_combo_descendant\(l as H, combo\)/);
-// Both windows use one shared setup: disable UxTheme on the ComboBox itself,
-// strip child edges, then subclass and paint the whole surface with GDI.
-assert.match(gui, /unsafe fn apply_dark_combo\(hwnd: H\)/);
-assert.match(gui, /SetWindowTheme\(hwnd, no_theme\.as_ptr\(\), no_theme\.as_ptr\(\)\)/);
-assert.match(gui, /theme_combo_children\(hwnd\)/);
-assert.match(gui, /SetWindowLongPtrW\(hwnd, -4, dark_combo_proc as isize\)/);
-assert.match(gui, /apply_dark_combo\(self\.controls\[18\]\)/);
-assert.match(settingsUi, /apply_dark_combo\(h\)/);
-assert.doesNotMatch(gui, /SetWindowTheme\(self\.controls\[18\], wide\("DarkMode_Explorer"/);
-assert.doesNotMatch(settingsUi, /if class == "COMBOBOX"\s*\{[\s\S]{0,220}DarkMode_Explorer/);
-assert.match(settingsUi, /is_combo_descendant\(l as H, combo\)/);
-assert.match(gui, /draw_combo_chrome\(hwnd\)/);
-// ComboBox paints a separate inset frame around its selected-value area.
-// Repaint that client-area boundary (plus the outer edges) after WM_PAINT;
-// a window DC / WM_NCPAINT overlay cannot reach this inner frame.
-assert.match(gui, /unsafe fn draw_combo_frame\(dc: H, rect: &Rect, divider: i32, color: u32, thickness: i32\)/);
-assert.match(gui, /Rect \{ left: 0, top: 0, right: rect\.right, bottom: t \}/);
-assert.match(gui, /Rect \{ left: 0, top: rect\.bottom - t, right: rect\.right, bottom: rect\.bottom \}/);
-assert.match(gui, /Rect \{ left: 0, top: 0, right: t, bottom: rect\.bottom \}/);
-assert.match(gui, /Rect \{ left: rect\.right - t, top: 0, right: rect\.right, bottom: rect\.bottom \}/);
-assert.match(gui, /Rect \{ left: t, top: t, right: split, bottom: \(2 \* t\)\.min\(rect\.bottom - t\) \}/);
-assert.match(gui, /Rect \{ left: t, top: rect\.bottom - 2 \* t, right: split, bottom: rect\.bottom - t \}/);
-assert.match(gui, /Rect \{ left: t, top: t, right: 2 \* t, bottom: rect\.bottom - t \}/);
-assert.match(gui, /Rect \{ left: split, top: t, right: \(split \+ t\)\.min\(rect\.right\), bottom: rect\.bottom - t \}/);
-assert.match(gui, /draw_combo_frame\(dc, &rect, arrow_left, border, thickness\)/);
-assert.match(gui, /0x000F => draw_combo_chrome\(hwnd\)/);
-assert.doesNotMatch(gui, /GetWindowDC|draw_combo_nonclient_frame/);
-assert.match(gui, /GetDpiForWindow/);
-assert.match(gui, /0x2c => \{ \/\/ WM_MEASUREITEM/);
+// Both windows must draw the entire closed choice field as a button.
+assert.doesNotMatch(gui + settingsUi, /"COMBOBOX"|dark_combo_proc|CB_SETCURSEL/);
+assert.match(gui, /\("BUTTON", "", 0x10000, 118\)/);
+assert.match(gui, /draw_choice_button\(item, app\.font, app\.scale\)/);
+assert.match(gui, /choose\(hwnd, l as H, PROFILES\)/);
+assert.match(gui, /TrackPopupMenu\(menu, 0x0100 \| 0x0080/);
 assert.match(settingsUi, /0x00010000 \| 0xB/);
 assert.match(settingsUi, /draw_settings_button/);
-assert.match(settingsUi, /draw_combo_item\(item, state\.font, state\.scale\)/);
-assert.match(settingsUi, /item\.control_type == 3 && matches!\(item\.control_id, 600\.\.=609\)/);
-assert.match(settingsUi, /measure\.control_type == 3 && matches!\(measure\.control_id, 600\.\.=609\)/);
-assert.doesNotMatch(settingsUi, /item\.control_type == 2 && matches!\(item\.control_id, 600\.\.=609\)/);
-assert.match(settingsUi, /0x0133 \| 0x0135 \| 0x0138/);
+assert.match(settingsUi, /draw_choice_button\(item, state\.font, state\.scale\)/);
+for (const id of [600, 601, 603, 604, 606, 607, 608, 609]) {
+    assert.ok(settingsUi.includes(`self.choice_button(${id},`));
+    assert.ok(settingsUi.includes(`${id} => Some(&[`));
+}
 // Themed auto-check buttons ignore SetTextColor. Keep the native checkbox
 // for keyboard and accessibility; give it a dark STATIC text label instead.
 assert.match(settingsUi, /self\.add\("BUTTON", text, 0x00010000 \| 0x3, id, x, y, 23, 27\)/);
 assert.match(settingsUi, /self\.add\("STATIC", text, 0x100 \| 0x200, id \+ 100/);
 assert.match(settingsUi, /710\.\.=713 =>/);
-assert.match(settingsUi, /SetBkColor\(dc, if edit \|\| list \{FIELD\} else \{BG\}\)/);
+assert.match(settingsUi, /SetBkColor\(dc, if edit \{ FIELD \} else \{ BG \}\)/);
 assert.match(settingsUi, /SetTextColor\(dc, TEXT\)/);
-assert.match(settingsUi, /0x002C => \{ \/\/ WM_MEASUREITEM/);
 
 // Regressions reported in 0.5.5: redraw only the progress strip,
 // keep folder icons visible on focus, and provide native hover feedback.

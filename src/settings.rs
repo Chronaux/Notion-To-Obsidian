@@ -9,6 +9,20 @@ use notion_to_obsidian::options::{
 extern "system" {
     fn GetSaveFileNameW(file: *mut OpenFile) -> i32;
 }
+fn choice_labels(id: usize) -> Option<&'static [&'static str]> {
+    match id {
+        600 => Some(&["Исходная иерархия Notion", "Группировать по корневому оглавлению"]),
+        601 => Some(&["Оставить в исходной папке", "Переместить в отдельную папку"]),
+        603 => Some(&["Внутри папки дочерних страниц", "Рядом с папкой"]),
+        604 => Some(&["В исходных разделах", "В общей корневой папке"]),
+        606 => Some(&["Markdown + Bases", "Только Markdown", "Только Bases"]),
+        607 => Some(&["Не добавлять", "Восстанавливать по заголовкам"]),
+        608 => Some(&["Callout с сохранением эмодзи", "Callout без эмодзи", "Сохранять исходную разметку"]),
+        609 => Some(&["Автоматически", "Указанные колонки JSON", "Не преобразовывать"]),
+        _ => None,
+    }
+}
+
 struct Editor {
     hwnd: H,
     parent: H,
@@ -38,12 +52,8 @@ impl Editor {
     unsafe fn label(&mut self, text: &str, x: i32, y: i32) {
         self.add("STATIC", text, 0, 0, x, y, 330, 20);
     }
-    unsafe fn combo(&mut self, id: isize, x: i32, y: i32, items: &[&str]) {
-        let h = self.add("COMBOBOX", "", 0x00010000 | 0x00200000 | 0x3 | 0x10 | 0x200, id, x, y, 332, 225);
-        for item in items {
-            SendMessageW(h, 0x0143, 0, wide(item).as_ptr() as isize); // CB_ADDSTRING
-        }
-        apply_dark_combo(h);
+    unsafe fn choice_button(&mut self, id: isize, x: i32, y: i32) {
+        self.button(id, "", x, y, 330);
     }
     unsafe fn check(&mut self, id: isize, text: &str, x: i32, y: i32) {
         // A themed BS_AUTOCHECKBOX ignores WM_CTLCOLORBTN text colours on Win10/11.
@@ -69,26 +79,26 @@ impl Editor {
         self.bg = CreateSolidBrush(BG);
         self.field = CreateSolidBrush(FIELD);
         self.label("Структура разделов", 20, 16);
-        self.combo(600, 20, 39, &["Исходная иерархия Notion", "Группировать по корневому оглавлению"]);
+        self.choice_button(600, 20, 39);
         self.label("Страницы без раздела", 20, 80);
-        self.combo(601, 20, 103, &["Оставить в исходной папке", "Переместить в отдельную папку"]);
+        self.choice_button(601, 20, 103);
         self.label("Название папки без раздела", 20, 144);
         self.edit(602, 20, 167);
         self.label("Родительская страница", 20, 208);
-        self.combo(603, 20, 231, &["Внутри папки дочерних страниц", "Рядом с папкой"]);
+        self.choice_button(603, 20, 231);
         self.label("Расположение баз данных", 20, 272);
-        self.combo(604, 20, 295, &["В исходных разделах", "В общей корневой папке"]);
+        self.choice_button(604, 20, 295);
         self.label("Название общей папки баз", 20, 336);
         self.edit(605, 20, 359);
         self.label("Формат таблиц", 20, 400);
-        self.combo(606, 20, 423, &["Markdown + Bases", "Только Markdown", "Только Bases"]);
+        self.choice_button(606, 20, 423);
 
         self.label("Оглавления страниц", 385, 16);
-        self.combo(607, 385, 39, &["Не добавлять", "Восстанавливать по заголовкам"]);
+        self.choice_button(607, 385, 39);
         self.label("Блоки и выноски", 385, 80);
-        self.combo(608, 385, 103, &["Callout с сохранением эмодзи", "Callout без эмодзи", "Сохранять исходную разметку"]);
+        self.choice_button(608, 385, 103);
         self.label("Распознавание тегов", 385, 144);
-        self.combo(609, 385, 167, &["Автоматически", "Указанные колонки JSON", "Не преобразовывать"]);
+        self.choice_button(609, 385, 167);
         self.check(610, "Встраивать таблицы в статьи", 385, 214);
         self.check(611, "Создавать заметку «Начать здесь»", 385, 246);
         self.check(612, "Добавлять CSS для полных таблиц", 385, 278);
@@ -106,10 +116,12 @@ impl Editor {
         self.controls.iter().copied().find(|&h| GetWindowLongPtrW(h, -12) as usize == id).unwrap_or(0)
     }
     unsafe fn selected(&self, id: usize) -> usize {
-        SendMessageW(self.child(id), 0x0147, 0, 0).max(0) as usize // CB_GETCURSEL
+        selected_choice(self.child(id))
     }
     unsafe fn set_selected(&self, id: usize, selected: usize) {
-        SendMessageW(self.child(id), 0x014E, selected, 0); // CB_SETCURSEL
+        if let Some(labels) = choice_labels(id) {
+            set_choice(self.child(id), labels, selected);
+        }
     }
     unsafe fn checked(&self, id: usize) -> bool {
         SendMessageW(self.child(id), 0x00F0, 0, 0) != 0 // BM_GETCHECK
@@ -236,6 +248,14 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
     }
     let state = GetWindowLongPtrW(hwnd, -21) as *mut Editor;
     if state.is_null() { return DefWindowProcW(hwnd, msg, w, l); }
+    if msg == 0x0111 && l != 0 {
+        if let Some(labels) = choice_labels(w) {
+            if let Some(index) = choose(hwnd, l as H, labels) {
+                set_choice(l as H, labels, index);
+            }
+            return 0;
+        }
+    }
     let state = &mut *state;
     match msg {
         0x0014 => 1, // avoid default light background erase
@@ -248,39 +268,26 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
             EndPaint(hwnd, &paint);
             0
         }
-        0x0133 | 0x0135 | 0x0138 | 0x0134 => {
-            let combo_part = l != 0 && state.controls.iter()
-                .any(|&combo| is_combo_descendant(l as H, combo));
-            let edit = combo_part || (w != 0 && state.controls.iter()
-                .any(|&h| h == l as H && (h == state.child(602) || h == state.child(605))));
+        0x0133 | 0x0135 | 0x0138 => {
+            let edit = l != 0 && (l as H == state.child(602) || l as H == state.child(605));
             let dc = w as H;
-            let list = msg == 0x0134;
             SetBkMode(dc, 1);
-            SetBkColor(dc, if edit || list {FIELD} else {BG});
+            SetBkColor(dc, if edit { FIELD } else { BG });
             SetTextColor(dc, TEXT);
-            if edit || list {state.field} else {state.bg}
+            if edit { state.field } else { state.bg }
         }
         0x002B => { // WM_DRAWITEM
             if l != 0 {
                 let item = &*(l as *const DrawItem);
-                if item.control_type == 4 && matches!(item.control_id, 614..=617) {
-                    draw_settings_button(item, state);
-                    return 1;
-                }
-                // ODT_COMBOBOX=3, not ODT_LISTBOX=2.
-                if item.control_type == 3 && matches!(item.control_id, 600..=609) {
-                    draw_combo_item(item, state.font, state.scale);
-                    return 1;
-                }
-            }
-            DefWindowProcW(hwnd, msg, w, l)
-        }
-        0x002C => { // WM_MEASUREITEM
-            if l != 0 {
-                let measure = &mut *(l as *mut MeasureItem);
-                if measure.control_type == 3 && matches!(measure.control_id, 600..=609) {
-                    measure.item_height = (28.0 * state.scale).round() as u32;
-                    return 1;
+                if item.control_type == 4 {
+                    if matches!(item.control_id, 614..=617) {
+                        draw_settings_button(item, state);
+                        return 1;
+                    }
+                    if choice_labels(item.control_id as usize).is_some() {
+                        draw_choice_button(item, state.font, state.scale);
+                        return 1;
+                    }
                 }
             }
             DefWindowProcW(hwnd, msg, w, l)

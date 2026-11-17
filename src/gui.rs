@@ -58,15 +58,6 @@ struct DrawItem {
     rect: Rect,
     item_data: usize,
 }
-#[repr(C)]
-struct MeasureItem {
-    control_type: u32,
-    control_id: u32,
-    item_id: u32,
-    item_width: u32,
-    item_height: u32,
-    item_data: usize,
-}
 // TOOLINFOW / comctl32 tooltip ABI on Windows x64.
 #[repr(C)]
 struct ToolInfo {
@@ -237,8 +228,6 @@ extern "system" {
     fn SetWindowLongPtrW(hwnd: H, index: i32, value: isize) -> isize;
     fn CallWindowProcW(proc: isize, hwnd: H, msg: u32, w: usize, l: isize) -> isize;
     fn GetParent(hwnd: H) -> H;
-    fn EnumChildWindows(hwnd: H, callback: Option<unsafe extern "system" fn(H, isize) -> i32>, param: isize) -> i32;
-    fn GetClassNameW(hwnd: H, class_name: *mut u16, max: i32) -> i32;
     fn TrackMouseEvent(event: *mut TrackMouse) -> i32;
     fn SetCursor(cursor: H) -> H;
     fn SetFocus(hwnd: H) -> H;
@@ -250,11 +239,12 @@ extern "system" {
     fn EnableWindow(hwnd: H, enable: i32) -> i32;
     fn MoveWindow(hwnd: H, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
     fn GetClientRect(hwnd: H, rect: *mut Rect) -> i32;
-    fn GetDC(hwnd: H) -> H;
+    fn CreatePopupMenu() -> H;
+    fn AppendMenuW(menu: H, flags: u32, id: usize, label: *const u16) -> i32;
+    fn TrackPopupMenu(menu: H, flags: u32, x: i32, y: i32, reserved: i32,
+        owner: H, rect: *const Rect) -> i32;
+    fn DestroyMenu(menu: H) -> i32;
     fn GetWindowRect(hwnd: H, rect: *mut Rect) -> i32;
-    fn ReleaseDC(hwnd: H, dc: H) -> i32;
-    fn GetDpiForWindow(hwnd: H) -> u32;
-    fn GetFocus() -> H;
     fn SetWindowPos(hwnd: H, after: H, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
     fn DestroyWindow(hwnd: H) -> i32;
     fn InvalidateRect(hwnd: H, rect: *const Rect, erase: i32) -> i32;
@@ -381,216 +371,77 @@ unsafe fn rounded(dc: H, rect: &Rect, fill: u32, outline: u32, radius: i32) {
     DeleteObject(brush);
 }
 
-// Owner-drawn combo items use the same palette in the main window and settings.
-unsafe fn draw_combo_item(item: &DrawItem, font: H, scale: f32) {
-    let editing = item.item_state & 0x1000 != 0; // ODS_COMBOBOXEDIT
-    let selected = item.item_state & 0x0001 != 0; // ODS_SELECTED
-    let disabled = item.item_state & 0x0004 != 0; // ODS_DISABLED
-    let fill = if selected && !editing { rgb(58, 50, 84) } else { FIELD };
-    let brush = CreateSolidBrush(fill);
+const PROFILES: &[&str] = &["Универсальный", "База знаний", "Пользовательский"];
+
+// The button owns the entire closed field. The system menu handles dismissal
+// and keyboard navigation without painting any part of that field.
+unsafe fn draw_choice_button(item: &DrawItem, font: H, scale: f32) {
+    let p = |n: i32| (n as f32 * scale).round() as i32;
+    let disabled = item.item_state & 0x0004 != 0;
+    let focused = item.item_state & 0x0010 != 0;
+    let pressed = item.item_state & 0x0001 != 0;
+    let fill = if pressed && !disabled { TRACK } else { FIELD };
+
+    let brush = CreateSolidBrush(BG);
     FillRect(item.dc, &item.rect, brush);
     DeleteObject(brush);
+    rounded(item.dc, &item.rect, fill, if focused && !disabled { ACCENT } else { fill }, p(8));
 
-    let index = if item.item_id == u32::MAX {
-        SendMessageW(item.hwnd, 0x0147, 0, 0) // CB_GETCURSEL
-    } else {
-        item.item_id as isize
-    };
-    if index >= 0 {
-        let length = SendMessageW(item.hwnd, 0x0149, index as usize, 0) // CB_GETLBTEXTLEN
-            .max(0) as usize;
-        if length > 0 {
-            let mut label = vec![0u16; length + 1];
-            SendMessageW(item.hwnd, 0x0148, index as usize, label.as_mut_ptr() as isize);
-            let old_font = SelectObject(item.dc, font);
-            SetBkMode(item.dc, 1);
-            SetTextColor(item.dc, if disabled { MUTED } else { TEXT });
-            let pad = (10.0 * scale).round() as i32;
-            let mut text = item.rect;
-            text.left += pad;
-            text.right -= (editing as i32) * (28.0 * scale).round() as i32;
-            DrawTextW(item.dc, label.as_ptr(), length as i32, &mut text,
-                0x20 | 0x4 | 0x800 | 0x8000); // single line, centered, no prefix, ellipsis
-            SelectObject(item.dc, old_font);
-        }
-    }
-}
+    let old_font = SelectObject(item.dc, font);
+    SetBkMode(item.dc, 1);
+    SetTextColor(item.dc, if disabled { MUTED } else { TEXT });
+    let label = wide(&get(item.hwnd));
+    let mut text = item.rect;
+    text.left += p(12);
+    text.right -= p(30);
+    DrawTextW(item.dc, label.as_ptr(), (label.len() - 1) as i32, &mut text,
+        0x4 | 0x20 | 0x800 | 0x8000); // VCenter | SingleLine | NoPrefix | EndEllipsis
+    SelectObject(item.dc, old_font);
 
-// CBS_DROPDOWNLIST may create an internal EDIT/STATIC child for the selected
-// value. Disable its visual-style frame and strip all common edge styles:
- // the parent ComboBox paints the complete dark client frame after WM_PAINT.
-unsafe extern "system" fn theme_combo_child(hwnd: H, _param: isize) -> i32 {
-    let mut class_name = [0u16; 32];
-    let length = GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32);
-    if length <= 0 {
-        return 1;
-    }
-    let class_name = String::from_utf16_lossy(&class_name[..length as usize]);
-    if class_name.eq_ignore_ascii_case("EDIT") || class_name.eq_ignore_ascii_case("STATIC") {
-        // Empty theme names disable uxtheme for this child; a dark theme class
-        // can still paint its own inset edge even after WS_BORDER is removed.
-        SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
-        let style = GetWindowLongPtrW(hwnd, -16); // GWL_STYLE
-        let ex_style = GetWindowLongPtrW(hwnd, -20); // GWL_EXSTYLE
-        let dark_style = style & !0x00800000; // WS_BORDER
-        let dark_ex_style = ex_style & !(0x00000200 | 0x00020000); // WS_EX_CLIENTEDGE | WS_EX_STATICEDGE
-        let mut frame_changed = false;
-        if dark_style != style {
-            SetWindowLongPtrW(hwnd, -16, dark_style);
-            frame_changed = true;
-        }
-        if dark_ex_style != ex_style {
-            SetWindowLongPtrW(hwnd, -20, dark_ex_style);
-            frame_changed = true;
-        }
-        if frame_changed {
-            // SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
-            SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x37);
-        }
-        InvalidateRect(hwnd, null(), 1);
-    }
-    1
-}
-
-unsafe fn theme_combo_children(hwnd: H) {
-    if hwnd != 0 {
-        EnumChildWindows(hwnd, Some(theme_combo_child), 0);
-    }
-}
-
-// The ComboBox itself must not use a themed frame: DarkMode_Explorer still
-// paints a bright inset around CBS_DROPDOWNLIST's selected-value area.
-// Disable UxTheme on the parent and its internal display child, then let the
-// shared subclass paint the complete client chrome with our GDI palette.
-unsafe fn apply_dark_combo(hwnd: H) {
-    if hwnd == 0 {
-        return;
-    }
-    let no_theme = wide("");
-    SetWindowTheme(hwnd, no_theme.as_ptr(), no_theme.as_ptr());
-    theme_combo_children(hwnd);
-    let previous = SetWindowLongPtrW(hwnd, -4, dark_combo_proc as isize);
-    if previous != 0 {
-        SetWindowLongPtrW(hwnd, -21, previous);
-    }
-    InvalidateRect(hwnd, null(), 1);
-}
-
-unsafe fn is_combo_descendant(hwnd: H, combo: H) -> bool {
-    let mut parent = GetParent(hwnd);
-    while parent != 0 {
-        if parent == combo {
-            return true;
-        }
-        parent = GetParent(parent);
-    }
-    false
-}
-
-// The system theme can still paint a light arrow/frame even for an owner-drawn
-// combo. Paint that small chrome area after the native control has painted its
-// text; the popup rows themselves are handled by draw_combo_item.
-// ComboBox's selected-value area is owner-drawn, but the themed control still
-// paints a bright inset frame around that area. Repaint the complete client
-// chrome after the native WM_PAINT: outer edges, value-field boundary, arrow,
-// separator and chevron all use the application's palette.
-unsafe fn draw_combo_frame(dc: H, rect: &Rect, divider: i32, color: u32, thickness: i32) {
-    if rect.right <= 0 || rect.bottom <= 0 || thickness <= 0 {
-        return;
-    }
-    let t = thickness.min(rect.right / 2).min(rect.bottom / 2).max(1);
-    let split = divider.clamp(t, rect.right - t);
-
-    // The native theme leaves a one-pixel white inset around the selected
-    // value area. Replace those inner bands with the field fill; the dark
-    // outer border remains the only perimeter around the value area.
-    let field_brush = CreateSolidBrush(FIELD);
-    let inset_edges = [
-        Rect { left: t, top: t, right: split, bottom: (2 * t).min(rect.bottom - t) },
-        Rect { left: t, top: rect.bottom - 2 * t, right: split, bottom: rect.bottom - t },
-        Rect { left: t, top: t, right: 2 * t, bottom: rect.bottom - t },
-    ];
-    for edge in &inset_edges {
-        FillRect(dc, edge, field_brush);
-    }
-    DeleteObject(field_brush);
-
-    let brush = CreateSolidBrush(color);
-    let edges = [
-        Rect { left: 0, top: 0, right: rect.right, bottom: t },
-        Rect { left: 0, top: rect.bottom - t, right: rect.right, bottom: rect.bottom },
-        Rect { left: 0, top: 0, right: t, bottom: rect.bottom },
-        Rect { left: rect.right - t, top: 0, right: rect.right, bottom: rect.bottom },
-        // Divider between the value area and dropdown button.
-        Rect { left: split, top: t, right: (split + t).min(rect.right), bottom: rect.bottom - t },
-    ];
-    for edge in &edges {
-        FillRect(dc, edge, brush);
-    }
-    DeleteObject(brush);
-}
-
-unsafe fn draw_combo_chrome(hwnd: H) {
-    let dc = GetDC(hwnd);
-    if dc == 0 { return; }
-    let mut rect = Rect { left: 0, top: 0, right: 0, bottom: 0 };
-    GetClientRect(hwnd, &mut rect);
-    if rect.right <= 0 || rect.bottom <= 0 {
-        ReleaseDC(hwnd, dc);
-        return;
-    }
-    let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
-    let p = |n: i32| (n as f32 * scale).round() as i32;
-    let thickness = p(1).max(1).min(rect.right).min(rect.bottom);
-    let arrow_width = p(26).min(rect.right.saturating_sub(thickness));
-    let arrow_left = rect.right - arrow_width;
-    let arrow = Rect {
-        left: arrow_left,
-        top: thickness,
-        right: rect.right - thickness,
-        bottom: rect.bottom - thickness,
-    };
-    let brush = CreateSolidBrush(FIELD);
-    FillRect(dc, &arrow, brush);
-    DeleteObject(brush);
-
-    let enabled = IsWindowEnabled(hwnd) != 0;
-    let focused = GetFocus() == hwnd;
-    let border = if enabled && focused { ACCENT } else { BORDER };
-    draw_combo_frame(dc, &rect, arrow_left, border, thickness);
-
-    // The dropdown button is custom-painted as part of the same surface.
-    let pen = CreatePen(0, thickness, border);
-    let old_pen = SelectObject(dc, pen);
-    let cx = arrow_left + arrow_width / 2;
-    let cy = rect.bottom / 2;
-    let half = p(4);
-    MoveToEx(dc, cx - half, cy - p(2), null_mut());
-    LineTo(dc, cx, cy + p(2));
-    LineTo(dc, cx + half, cy - p(2));
-    SelectObject(dc, old_pen);
+    let x = item.rect.right - p(15);
+    let y = (item.rect.top + item.rect.bottom) / 2;
+    let pen = CreatePen(0, p(1), if disabled { MUTED } else { TEXT });
+    let old_pen = SelectObject(item.dc, pen);
+    MoveToEx(item.dc, x - p(4), y - p(2), null_mut());
+    LineTo(item.dc, x, y + p(2));
+    LineTo(item.dc, x + p(4), y - p(2));
+    SelectObject(item.dc, old_pen);
     DeleteObject(pen);
-    ReleaseDC(hwnd, dc);
 }
 
-// Store the original WNDPROC in this control's GWLP_USERDATA. This is isolated
-// per combo and leaves the parent dialog's own state untouched.
-unsafe extern "system" fn dark_combo_proc(hwnd: H, msg: u32, w: usize, l: isize) -> isize {
-    let previous = GetWindowLongPtrW(hwnd, -21);
-    let result = if previous != 0 {
-        CallWindowProcW(previous, hwnd, msg, w, l)
-    } else {
-        DefWindowProcW(hwnd, msg, w, l)
-    };
-    match msg {
-        0x000F => draw_combo_chrome(hwnd), // WM_PAINT: replace themed chrome after owner-drawn text
-        0x0007 | 0x0008 | 0x000A | 0x0086 | 0x0201 | 0x0202 => {
-            InvalidateRect(hwnd, null(), 0);
-        }
-        _ => {}
-    }
-    result
+unsafe fn selected_choice(button: H) -> usize {
+    GetWindowLongPtrW(button, -21) as usize // GWLP_USERDATA
 }
+
+unsafe fn set_choice(button: H, labels: &[&str], index: usize) {
+    SetWindowLongPtrW(button, -21, index as isize);
+    set(button, labels[index]);
+    InvalidateRect(button, null(), 0);
+}
+
+unsafe fn choose(owner: H, button: H, labels: &[&str]) -> Option<usize> {
+    let mut rect: Rect = std::mem::zeroed();
+    if GetWindowRect(button, &mut rect) == 0 {
+        return None;
+    }
+    let menu = CreatePopupMenu();
+    if menu == 0 {
+        return None;
+    }
+    let selected = selected_choice(button);
+    for (index, label) in labels.iter().enumerate() {
+        let checked = if index == selected { 0x8 } else { 0 }; // MF_CHECKED
+        if AppendMenuW(menu, checked, index + 1, wide(label).as_ptr()) == 0 {
+            DestroyMenu(menu);
+            return None;
+        }
+    }
+    // TPM_RETURNCMD | TPM_NONOTIFY: zero on dismissal; no synthetic WM_COMMAND.
+    let command = TrackPopupMenu(menu, 0x0100 | 0x0080, rect.left, rect.bottom, 0, owner, null());
+    DestroyMenu(menu);
+    (command as usize).checked_sub(1).filter(|&index| index < labels.len())
+}
+
 
 unsafe fn rule(dc: H, x1: i32, y: i32, x2: i32) {
     let pen = CreatePen(0, 1, BORDER);
@@ -846,7 +697,7 @@ impl App {
             ("BUTTON", "Пропускать отсутствующие страницы", 0x10000, 110),
             ("BUTTON", "Справка по ZIP", 0x10000, 112),
             ("STATIC", "Профиль экспорта", 0, 0),
-            ("COMBOBOX", "", 0x10000 | 0x00200000 | 0x3 | 0x10 | 0x200, 118),
+            ("BUTTON", "", 0x10000, 118),
             ("BUTTON", "Настроить…", 0x10000, 119),
             ("BUTTON", "Предпросмотр", 0x10000, 120),
         ];
@@ -863,11 +714,7 @@ impl App {
                 else { self.font as usize }, 1);
             self.controls.push(h);
         }
-        for label in ["Универсальный", "База знаний", "Пользовательский"] {
-            SendMessageW(self.controls[18], 0x0143, 0, wide(label).as_ptr() as isize);
-        }
-        SendMessageW(self.controls[18], 0x014E, 1, 0);
-        apply_dark_combo(self.controls[18]);
+        set_choice(self.controls[18], PROFILES, 1);
         let default = std::env::var_os("USERPROFILE")
             .map(PathBuf::from).unwrap_or(PathBuf::from("."))
             .join("Documents").join("Notion_Obsidian");
@@ -960,7 +807,7 @@ impl App {
             (m, v(305), roww, v(32)),              // Skip missing checkbox
             (m + v(155), v(74), v(22), v(22)),     // ZIP help tooltip trigger
             (m, v(236), roww, v(22)),              // Profile label
-            (m, v(261), roww - v(291), v(215)),   // Native profile dropdown
+            (m, v(261), roww - v(291), v(32)),    // Profile menu button
             (w - m - v(141), v(261), v(141), v(32)), // Configure profile
             (w - m - v(282), v(261), v(135), v(32)), // Preview without writing
         ];
@@ -1376,6 +1223,23 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
     }
     let ptr = GetWindowLongPtrW(hwnd, -21) as *mut App;
     if ptr.is_null() { return DefWindowProcW(hwnd, msg, w, l); }
+    // The popup runs a nested message loop. Don't hold a mutable app borrow
+    // across that call.
+    if msg == 0x111 && w == 118 && l != 0 {
+        if !(*ptr).busy && l as H == (&(*ptr).controls)[18] {
+            if let Some(choice) = choose(hwnd, l as H, PROFILES) {
+                let app = &mut *ptr;
+                set_choice(l as H, PROFILES, choice);
+                match choice {
+                    0 => app.options = ConversionOptions::universal(),
+                    1 => app.options = ConversionOptions::knowledge(),
+                    _ => {}
+                }
+                app.set_status_visible(false);
+            }
+        }
+        return 0;
+    }
     let app = &mut *ptr;
     match msg {
         0x14 => 1, // WM_ERASEBKGND: WM_PAINT handles all drawing without flicker
@@ -1401,38 +1265,24 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
             }
             0
         }
-        0x133 | 0x134 | 0x138 => { // WM_CTLCOLOREDIT / WM_CTLCOLORLISTBOX / WM_CTLCOLORSTATIC
+        0x133 | 0x138 => { // WM_CTLCOLOREDIT / WM_CTLCOLORSTATIC
             let dc = w as H;
             let index = app.controls.iter().position(|&h| h == l as H);
-            let list = msg == 0x134;
-            let combo_part = l != 0 && app.controls.get(18)
-                .is_some_and(|&combo| is_combo_descendant(l as H, combo));
-            let edit = index == Some(3) || index == Some(6) || combo_part;
-            SetBkColor(dc, if edit || list { FIELD } else { BG });
+            let edit = matches!(index, Some(3 | 6));
+            SetBkColor(dc, if edit { FIELD } else { BG });
             SetBkMode(dc, if edit { 2 } else { 1 });
-            SetTextColor(dc, if edit || list || matches!(index, Some(0 | 2 | 5 | 12)) { TEXT } else { MUTED });
-            if edit || list { app.field_brush } else { app.bg_brush }
+            SetTextColor(dc, if edit || matches!(index, Some(0 | 2 | 5 | 12)) { TEXT } else { MUTED });
+            if edit { app.field_brush } else { app.bg_brush }
         }
         0x2b => { // WM_DRAWITEM
             if l != 0 {
                 let item = &*(l as *const DrawItem);
                 if item.control_type == 4 {
-                    draw_button(item, app);
-                    return 1;
-                }
-                // ODT_COMBOBOX=3 (ODT_LISTBOX=2); the old value made every item blank.
-                if item.control_type == 3 && item.control_id == 118 {
-                    draw_combo_item(item, app.font, app.scale);
-                    return 1;
-                }
-            }
-            DefWindowProcW(hwnd, msg, w, l)
-        }
-        0x2c => { // WM_MEASUREITEM
-            if l != 0 {
-                let measure = &mut *(l as *mut MeasureItem);
-                if measure.control_type == 3 && measure.control_id == 118 {
-                    measure.item_height = (28.0 * app.scale).round() as u32;
+                    if item.control_id == 118 {
+                        draw_choice_button(item, app.font, app.scale);
+                    } else {
+                        draw_button(item, app);
+                    }
                     return 1;
                 }
             }
@@ -1459,19 +1309,10 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                 102 => if !app.busy { app.choose_zip() },
                 104 => if !app.busy { app.choose_output() },
                 112 => dialog(hwnd, ZIP_HELP),
-                118 if !app.busy && ((w >> 16) & 0xffff) == 1 => {
-                    let choice = SendMessageW(app.controls[18], 0x0147, 0, 0);
-                    match choice {
-                        0 => app.options = ConversionOptions::universal(),
-                        1 => app.options = ConversionOptions::knowledge(),
-                        _ => {}
-                    }
-                    app.set_status_visible(false);
-                },
                 119 if !app.busy => {
                     if let Some(options) = settings::show(hwnd, &app.options, app.scale) {
                         app.options = options;
-                        SendMessageW(app.controls[18], 0x014E, 2, 0);
+                        set_choice(app.controls[18], PROFILES, 2);
                         app.set_status_visible(false);
                     }
                 },
