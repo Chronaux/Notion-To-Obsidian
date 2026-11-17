@@ -1,6 +1,10 @@
-# Notion → Obsidian · Rust 0.5.9
+# Notion → Obsidian · Rust 0.5.10
 
 Переносимое приложение Windows 10/11 x64. Последнюю успешно проверенную версию скачивайте с [GitHub Releases](https://github.com/Chronaux/Notion-To-Obsidian/releases/latest/download/NotionToObsidian_Windows_x64.zip). В ZIP лежит готовый EXE; Rust, Python и другие среды не нужны. Новый релиз появляется только после успешной сборки и проверки на Windows.
+
+## Версия 0.5.10
+
+- Универсальная проверка приватных данных больше не содержит названий и адресов конкретных рабочих систем.
 
 ## Версия 0.5.9
 

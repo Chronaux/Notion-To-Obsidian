@@ -16,7 +16,7 @@ RULES = {
     "personal_email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     "windows_home": re.compile(r"\b[A-Za-z]:[/\\]Users[/\\][^/\\\s\"']+"),
     "unix_home": re.compile(r"/(?:Users|home)/[^/\s\"']+"),
-    "workplace": re.compile(r"МЭШ|Московская электронная школа|school\.itsm\.mos\.ru", re.I),
+    "internal_host": re.compile(r"https?://(?:[a-z0-9-]+\.)*(?:intranet|internal|helpdesk|service-desk|itsm)\.[a-z0-9.-]+", re.I),
     "notion_private_link": re.compile(r"https?://(?:www\.)?(?:notion\.so|notion\.site|app\.notion\.com)/[^\s\"'<>)]*[a-f0-9]{32}", re.I),
 }
 
