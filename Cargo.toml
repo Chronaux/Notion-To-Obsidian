@@ -1,6 +1,6 @@
 [package]
 name = "notion-to-obsidian"
-version = "0.5.8"
+version = "0.5.9"
 edition = "2021"
 description = "Portable offline Notion Markdown & CSV to Obsidian converter"
 build = "build.rs"

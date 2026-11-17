@@ -514,7 +514,7 @@ impl App {
         }
         let default = std::env::var_os("USERPROFILE")
             .map(PathBuf::from).unwrap_or(PathBuf::from("."))
-            .join("Documents").join("Notion_Obsidian_v0.5.8");
+            .join("Documents").join("Notion_Obsidian_v0.5.9");
         set(self.controls[6], &fresh_path(default).to_string_lossy());
         ShowWindow(self.controls[8], 0);
         ShowWindow(self.controls[11], 0);
@@ -793,7 +793,7 @@ impl App {
                 let end = buf.iter().position(|&x| x == 0).unwrap();
                 let path = fresh_path(
                     PathBuf::from(String::from_utf16_lossy(&buf[..end]))
-                        .join("Notion_Obsidian_v0.5.8"),
+                        .join("Notion_Obsidian_v0.5.9"),
                 );
                 set(self.controls[6], &path.to_string_lossy());
             }
