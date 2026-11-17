@@ -1289,14 +1289,15 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
             }
             0
         }
-        0x133 | 0x138 => { // WM_CTLCOLOREDIT / WM_CTLCOLORSTATIC
+        0x133 | 0x134 | 0x138 => { // WM_CTLCOLOREDIT / WM_CTLCOLORLISTBOX / WM_CTLCOLORSTATIC
             let dc = w as H;
             let index = app.controls.iter().position(|&h| h == l as H);
+            let list = msg == 0x134;
             let edit = index == Some(3) || index == Some(6);
-            SetBkColor(dc, if edit { FIELD } else { BG });
+            SetBkColor(dc, if edit || list { FIELD } else { BG });
             SetBkMode(dc, if edit { 2 } else { 1 });
-            SetTextColor(dc, if edit || matches!(index, Some(0 | 2 | 5 | 12)) { TEXT } else { MUTED });
-            if edit { app.field_brush } else { app.bg_brush }
+            SetTextColor(dc, if edit || list || matches!(index, Some(0 | 2 | 5 | 12)) { TEXT } else { MUTED });
+            if edit || list { app.field_brush } else { app.bg_brush }
         }
         0x2b => { // WM_DRAWITEM
             if l != 0 {
@@ -1305,7 +1306,8 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                     draw_button(item, app);
                     return 1;
                 }
-                if item.control_type == 2 && item.control_id == 118 {
+                // ODT_COMBOBOX=3 (ODT_LISTBOX=2); the old value made every item blank.
+                if item.control_type == 3 && item.control_id == 118 {
                     draw_combo_item(item, app.font, app.scale);
                     return 1;
                 }
@@ -1315,7 +1317,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         0x2c => { // WM_MEASUREITEM
             if l != 0 {
                 let measure = &mut *(l as *mut MeasureItem);
-                if measure.control_type == 2 && measure.control_id == 118 {
+                if measure.control_type == 3 && measure.control_id == 118 {
                     measure.item_height = (28.0 * app.scale).round() as u32;
                     return 1;
                 }
