@@ -1758,7 +1758,7 @@ impl Converter {
                 }
                 format!("[!example]- {title}")
             } else {
-                let (kind, title, clean) = clean_callout(&body);
+                let (kind, mut title, clean) = clean_callout(&body);
                 body = clean;
                 if let Some(icon) = leading_icon {
                     if title.is_empty() {
