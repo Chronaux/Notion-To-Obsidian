@@ -1638,6 +1638,10 @@ impl Converter {
         out
     }
     fn markup(&mut self, text: &str) -> String {
+        if self.options.content.callouts == Callouts::PreserveMarkdown {
+            return text.to_string();
+        }
+        let keep_emoji = self.options.content.callouts == Callouts::ConvertKeepEmoji;
         let mut saved = vec![];
         let mut masked = String::new();
         for (code, chunk) in code_parts(text) {
@@ -1700,6 +1704,9 @@ impl Converter {
                 .trim()
                 .to_string();
             let mut title = String::new();
+            let leading_icon = if tag == "aside" && keep_emoji {
+                body.lines().next().and_then(|line| emoji_prefix(line).map(|(symbol, _)| symbol))
+            } else { None };
             if tag == "details" {
                 let sum = rx(r"(?s)<summary[^>]*>(.*?)</summary>");
                 if let Some(c) = sum.captures(&body) {
@@ -1708,13 +1715,20 @@ impl Converter {
                 }
             }
             let header = if tag == "details" {
-                if let Some((_, clean)) = emoji_prefix(&title) {
-                    title = clean;
+                if let Some((icon, clean)) = emoji_prefix(&title) {
+                    title = if keep_emoji { format!("{icon} {clean}") } else { clean };
                 }
                 format!("[!example]- {title}")
             } else {
                 let (kind, title, clean) = clean_callout(&body);
                 body = clean;
+                if let Some(icon) = leading_icon {
+                    if title.is_empty() {
+                        body = format!("{icon}\n{body}");
+                    } else {
+                        title = format!("{icon} {title}");
+                    }
+                }
                 if title.is_empty() {
                     format!("[!{kind}]")
                 } else {
@@ -1761,6 +1775,7 @@ impl Converter {
         text
     }
     fn restore_toc(&mut self, body: String, source: &str) -> String {
+        if self.options.content.toc == Toc::Preserve { return body; }
         let headings = section_headings(&body);
         if headings.len() < 2 || body.contains("[[#") || !source.contains('/') {
             return body;
@@ -1802,6 +1817,7 @@ impl Converter {
         let targets = self
             .dbs
             .iter()
+            .filter(|db| self.options.embed_database(&db.uid))
             .map(|db| db.target.clone())
             .collect::<BTreeSet<_>>();
         let mut result = String::new();
@@ -1857,7 +1873,9 @@ impl Converter {
             let p = self.pages[pi].clone();
             let mut meta = BTreeMap::<String, Value>::new();
             let mut body = p.text.clone();
-            let mut tags = metadata_tags(&p.text).into_iter().collect::<BTreeSet<_>>();
+            let mut tags = if self.options.content.tags == options::Tags::Auto {
+                metadata_tags(&p.text).into_iter().collect::<BTreeSet<_>>()
+            } else { BTreeSet::new() };
             let header = p
                 .text
                 .split_once("\n\n")
@@ -1866,14 +1884,14 @@ impl Converter {
             let top_tags = header
                 .lines()
                 .filter_map(|l| l.split_once(':'))
-                .filter(|(k, _)| is_tag_column(k))
+                .filter(|(k, _)| self.options.is_tag_column(&p.db, k))
                 .map(|(k, v)| (k.to_string(), v.trim().to_string()))
                 .collect::<BTreeMap<_, _>>();
             body = remove_tag_lines(&body, &top_tags);
             if !p.db.is_empty() {
                 let db = self.dbs.iter().find(|d| d.uid == p.db).unwrap().clone();
                 for (key, value) in &p.row {
-                    if is_tag_column(key) {
+                    if self.options.is_tag_column(&p.db, key) {
                         tags.extend(obsidian_tags(value));
                         continue;
                     }
@@ -1883,15 +1901,17 @@ impl Converter {
                 let tag_values = p
                     .row
                     .iter()
-                    .filter(|(k, _)| is_tag_column(k))
+                    .filter(|(k, _)| self.options.is_tag_column(&p.db, k))
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
-                body = remove_tag_lines(&body, &tag_values);
+                body = if self.options.content.tags == options::Tags::Auto {
+                    remove_tag_lines(&body, &tag_values)
+                } else { body };
                 let exported = fields(&p.text, &db.columns);
                 for col in &db.columns {
                     let value = p.row.get(col).map(String::as_str).unwrap_or("");
-                    if is_tag_column(col)
-                        || Some(col) == db.columns.first()
+                    if self.options.is_tag_column(&p.db, col)
+                        || Some(col.as_str()) == self.options.title_key(&db.uid, &db.columns)
                         || value.is_empty()
                         || exported.contains_key(col)
                     {
@@ -1927,7 +1947,7 @@ impl Converter {
         let mut table_data = json!({"byPage":{},"byRowPath":{}});
         for db in self.dbs.clone() {
             self.check()?;
-            let title_col = db.columns.first().map(String::as_str).unwrap_or("Название");
+            let title_col = self.options.title_key(&db.uid, &db.columns).unwrap_or("Название");
             let property = |c: &String| {
                 if c == title_col {
                     "formula.Название".to_string()
@@ -1954,14 +1974,7 @@ impl Converter {
                 .map(|c| {
                     (
                         property(c),
-                        if c == title_col {
-                            320
-                        } else if matches!(c.as_str(), "Ответ" | "Примечание" | "Текст" | "Text")
-                        {
-                            680
-                        } else {
-                            220
-                        },
+                        self.options.column_width(&db.uid, c, c == title_col),
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
