@@ -49,7 +49,14 @@ impl Editor {
         }
     }
     unsafe fn check(&mut self, id: isize, text: &str, x: i32, y: i32) {
-        self.add("BUTTON", text, 0x00010000 | 0x3, id, x, y, 335, 27);
+        // A themed BS_AUTOCHECKBOX ignores WM_CTLCOLORBTN text colours on Win10/11.
+        // Keep the native, keyboard-accessible auto checkbox and its accessible
+        // name, but constrain its visible area to the glyph. Paint the caption
+        // with a separate STATIC label (which honours WM_CTLCOLORSTATIC).
+        self.add("BUTTON", text, 0x00010000 | 0x3, id, x, y, 23, 27);
+        // SS_NOTIFY lets a mouse click on the caption toggle the checkbox.
+        // No WS_TABSTOP: keyboard focus remains on the native checkbox.
+        self.add("STATIC", text, 0x100 | 0x200, id + 100, x + 28, y, 305, 27);
     }
     unsafe fn edit(&mut self, id: isize, x: i32, y: i32) {
         self.add("EDIT", "", 0x00010000 | 0x00000080 | 0x00800000, id, x, y, 330, 29);
@@ -247,10 +254,11 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
         0x0133 | 0x0135 | 0x0138 | 0x0134 => {
             let edit = w != 0 && state.controls.iter().any(|&h| h == l as H && (h == state.child(602) || h == state.child(605)));
             let dc = w as H;
+            let list = msg == 0x0134;
             SetBkMode(dc, 1);
-            SetBkColor(dc, if edit {FIELD} else {BG});
+            SetBkColor(dc, if edit || list {FIELD} else {BG});
             SetTextColor(dc, TEXT);
-            if edit {state.field} else {state.bg}
+            if edit || list {state.field} else {state.bg}
         }
         0x002B => { // WM_DRAWITEM
             if l != 0 {
@@ -259,7 +267,8 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
                     draw_settings_button(item, state);
                     return 1;
                 }
-                if item.control_type == 2 && matches!(item.control_id, 600..=609) {
+                // ODT_COMBOBOX=3, not ODT_LISTBOX=2.
+                if item.control_type == 3 && matches!(item.control_id, 600..=609) {
                     draw_combo_item(item, state.font, state.scale);
                     return 1;
                 }
@@ -269,7 +278,7 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
         0x002C => { // WM_MEASUREITEM
             if l != 0 {
                 let measure = &mut *(l as *mut MeasureItem);
-                if measure.control_type == 2 && matches!(measure.control_id, 600..=609) {
+                if measure.control_type == 3 && matches!(measure.control_id, 600..=609) {
                     measure.item_height = (28.0 * state.scale).round() as u32;
                     return 1;
                 }
@@ -278,6 +287,12 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
         }
         0x0111 => {
             match w & 0xffff {
+                710..=713 => { // STN_CLICKED on a caption toggles its native checkbox
+                    let checkbox = state.child((w & 0xffff) - 100);
+                    let checked = SendMessageW(checkbox, 0x00F0, 0, 0) != 0;
+                    SendMessageW(checkbox, 0x00F1, (!checked) as usize, 0);
+                    InvalidateRect(checkbox, null(), 1);
+                },
                 614 => if let Some(path) = state.json_path(false) {
                     match ConversionOptions::load(&path) {
                         Ok(options) => {state.options = options; state.refresh();},
