@@ -2010,21 +2010,37 @@ impl Converter {
             let title_link = format!(
                 "link(file.path, if(note[{title_key}], note[{title_key}], \"Без названия\"))"
             );
+            let output_mode = self.options.table_output(&db.uid);
+            let mut views = vec![
+                json!({"type":"table","name":"Экспортированный вид","filters":{"and":[membership(&view_paths)]},"order":order(&db.view_columns),"sort":[{"property":"formula.Порядок вида","direction":"ASC"}],"rowHeight":"tall","columnSize":widths}),
+                json!({"type":"table","name":"Все записи","order":order(&db.columns),"sort":[{"property":"formula.Порядок","direction":"ASC"}],"rowHeight":"tall","columnSize":widths}),
+            ];
+            if self.options.extras.table_plugin {
+                views.push(json!({"type":"notion-full-text","name":"Полный текст · копировать","order":order(&db.view_columns),"sort":[{"property":"formula.Порядок","direction":"ASC"}]}));
+            }
             let base = json!({"filters":{"and":["file.ext == \"md\"",membership(&paths)]},"properties":props,
             "formulas":{"Порядок":all_rank,"Порядок вида":view_rank,"Название":title_link},
-            "views":[
-              {"type":"table","name":"Экспортированный вид","filters":{"and":[membership(&view_paths)]},"order":order(&db.view_columns),"sort":[{"property":"formula.Порядок вида","direction":"ASC"}],"rowHeight":"tall","columnSize":widths},
-              {"type":"table","name":"Все записи","order":order(&db.columns),"sort":[{"property":"formula.Порядок","direction":"ASC"}],"rowHeight":"tall","columnSize":widths},
-              {"type":"notion-full-text","name":"Полный текст · копировать","order":order(&db.view_columns),"sort":[{"property":"formula.Порядок","direction":"ASC"}]}
-            ]});
-            self.output
-                .insert(db.base.clone(), pretty(&base).into_bytes());
+            "views":views});
+            if output_mode.bases() {
+                self.output.insert(db.base.clone(), pretty(&base).into_bytes());
+            }
             let cols = if db.view_columns.is_empty() {
                 &db.columns
             } else {
                 &db.view_columns
             };
-            let mut body=format!("# {}\n\nВсего записей: **{}**. {}\n\nВсе ячейки ниже показаны полностью. {}\n\n",db.title,db.rows.len(),Self::wiki(&db.base,"Открыть базу: фильтры и редактирование",false,false,""),"Для копирования по клику включите вложенный плагин Notion Full Tables; без него можно выделить текст и нажать Ctrl+C.");
+            let base_link = if output_mode.bases() {
+                Self::wiki(&db.base, "Открыть базу: фильтры и редактирование", false, false, "")
+            } else { String::new() };
+            let table_help = if self.options.extras.table_plugin {
+                "Для копирования по клику включите вложенный плагин Notion Full Tables; без него можно выделить текст и нажать Ctrl+C."
+            } else { "" };
+            let mut body = format!("# {}\n\nВсего записей: **{}**. {}\n\nВсе ячейки ниже показаны полностью. {}\n\n",
+                db.title, db.rows.len(), base_link, table_help);
+            if !output_mode.markdown() {
+                body = format!("# {}\n\n{}\n", db.title, base_link);
+            }
+            if output_mode.markdown() {
             body.push_str(&format!(
                 "| {} |\n| {} |\n",
                 cols.iter()
@@ -2059,6 +2075,7 @@ impl Converter {
                 raw_rows.push(values);
             }
             body.push_str("\n^notion-table\n");
+            }
             self.output.insert(db.target.clone(), body.into_bytes());
             table_data["byPage"][&db.target] = json!({"columns":cols,"rows":raw_rows,"titleIndex":cols.iter().position(|c|c==title_col)});
             for &pi in &db.pages {
@@ -2067,6 +2084,7 @@ impl Converter {
             self.report.databases.push(json!({"id":db.uid,"title":db.title,"rows":db.rows.len(),"view_rows":db.view_rows.len(),"base":db.base,"readable_table":db.target,"columns":db.keys}));
         }
         let plugin = ".obsidian/plugins/notion-table-copy/";
+        if self.options.extras.table_plugin {
         for (name, data) in [
             (
                 "main.js",
@@ -2088,6 +2106,8 @@ impl Converter {
             format!("{plugin}tables.json"),
             pretty(&table_data).into_bytes(),
         );
+        }
+        if self.options.extras.table_css {
         self.output.insert(
             ".obsidian/snippets/notion-full-tables.css".into(),
             include_str!("../assets/notion-table-copy/styles.css")
@@ -2098,6 +2118,7 @@ impl Converter {
             ".obsidian/appearance.json".into(),
             pretty(&json!({"enabledCssSnippets":["notion-full-tables"]})).into_bytes(),
         );
+        }
         self.output
             .insert(".obsidian/community-plugins.json".into(), b"[]".to_vec());
         self.output.insert(
@@ -2126,8 +2147,9 @@ impl Converter {
             self.report.block_link_fallbacks.len(),
         );
         let home=format!("# Обзор экспорта Notion → Obsidian\n\nОткройте эту папку как хранилище. Основной вид — таблицы с полным текстом; для фильтрации доступны **Bases / Базы**.\n\n## Главная страница\n\n{}\n\n## Базы\n\n{}\n\n## Как пользоваться\n\n- Поиск по содержимому: Ctrl+Shift+F.\n- Переход к заметке: Ctrl+O.\n- Полные ответы видны на страницах таблиц и в отдельных заметках.\n- Копирование одним кликом: Настройки → Сторонние плагины → включите Notion Full Tables. Плагин уже находится в этом хранилище; скачивать его не нужно.\n- В Bases после включения плагина доступен вид «Полный текст · копировать».\n- Теги сохранены в стандартном свойстве tags. Пробелы в тегах заменены подчёркиваниями.\n- Экспортированный вид — снимок состава строк.\n- Недостающие страницы обозначены заглушками, если не включён ручной пропуск.\n- Ссылки на точные блоки Notion без экспортированного адреса открывают соответствующую страницу; исходные адреса сохраняются при включённом отчёте о переносе.\n- Повторный запуск создаёт отдельное хранилище, без слияния локальных правок.\n",self.pages.iter().filter(|p|!p.source.contains('/')).map(|p|format!("- {}",Self::wiki(&p.target,&p.title,false,false,""))).collect::<Vec<_>>().join("\n"),self.dbs.iter().map(|d|format!("- {}",Self::wiki(&d.target,&d.title,false,false,""))).collect::<Vec<_>>().join("\n"));
-        self.output
-            .insert("Начать здесь.md".into(), home.into_bytes());
+        if self.options.extras.start_note {
+            self.output.insert("Начать здесь.md".into(), home.into_bytes());
+        }
         Ok(())
     }
     fn audit(&mut self, files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
