@@ -88,6 +88,12 @@ const settingsUi = fs.readFileSync('src/settings.rs', 'utf8');
 // same dark palette; settings action buttons are owner-drawn as well.
 assert.match(gui, /0x3 \| 0x10 \| 0x200/);
 assert.match(gui, /draw_combo_item\(item, app\.font, app\.scale\)/);
+// Regression: ODT_COMBOBOX is 3; using ODT_LISTBOX (2) left the entire
+// popup blank and removed the selected profile text in v0.6.1.
+assert.match(gui, /item\.control_type == 3 && item\.control_id == 118/);
+assert.match(gui, /measure\.control_type == 3 && measure\.control_id == 118/);
+assert.doesNotMatch(gui, /item\.control_type == 2 && item\.control_id == 118/);
+assert.match(gui, /0x133 \| 0x134 \| 0x138/);
 assert.match(gui, /unsafe extern "system" fn dark_combo_proc/);
 assert.match(gui, /draw_combo_chrome\(hwnd\)/);
 assert.match(gui, /GetDpiForWindow/);
@@ -95,7 +101,16 @@ assert.match(gui, /0x2c => \{ \/\/ WM_MEASUREITEM/);
 assert.match(settingsUi, /0x00010000 \| 0xB/);
 assert.match(settingsUi, /draw_settings_button/);
 assert.match(settingsUi, /draw_combo_item\(item, state\.font, state\.scale\)/);
+assert.match(settingsUi, /item\.control_type == 3 && matches!\(item\.control_id, 600\.\.=609\)/);
+assert.match(settingsUi, /measure\.control_type == 3 && matches!\(measure\.control_id, 600\.\.=609\)/);
+assert.doesNotMatch(settingsUi, /item\.control_type == 2 && matches!\(item\.control_id, 600\.\.=609\)/);
 assert.match(settingsUi, /0x0133 \| 0x0135 \| 0x0138/);
+// Themed auto-check buttons ignore SetTextColor. Keep the native checkbox
+// for keyboard and accessibility; give it a dark STATIC text label instead.
+assert.match(settingsUi, /self\.add\("BUTTON", text, 0x00010000 \| 0x3, id, x, y, 23, 27\)/);
+assert.match(settingsUi, /self\.add\("STATIC", text, 0x100 \| 0x200, id \+ 100/);
+assert.match(settingsUi, /710\.\.=713 =>/);
+assert.match(settingsUi, /SetBkColor\(dc, if edit \|\| list \{FIELD\} else \{BG\}\)/);
 assert.match(settingsUi, /SetTextColor\(dc, TEXT\)/);
 assert.match(settingsUi, /0x002C => \{ \/\/ WM_MEASUREITEM/);
 
