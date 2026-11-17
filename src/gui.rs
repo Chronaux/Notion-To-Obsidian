@@ -503,7 +503,12 @@ unsafe extern "system" fn dark_combo_proc(hwnd: H, msg: u32, w: usize, l: isize)
         DefWindowProcW(hwnd, msg, w, l)
     };
     match msg {
-        0x000F => draw_combo_chrome(hwnd), // WM_PAINT
+        0x000F => {
+            draw_combo_chrome(hwnd);
+            // Some Windows themes repaint the ComboBox frame during WM_PAINT,
+            // not only WM_NCPAINT. Overlay it in both paths.
+            draw_combo_nonclient_frame(hwnd);
+        }
         0x0085 => draw_combo_nonclient_frame(hwnd), // WM_NCPAINT
         0x0007 | 0x0008 | 0x000A | 0x0086 | 0x0201 | 0x0202 => {
             InvalidateRect(hwnd, null(), 0);
