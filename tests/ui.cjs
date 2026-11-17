@@ -109,19 +109,17 @@ assert.match(gui, /unsafe fn is_combo_descendant\(hwnd: H, combo: H\) -> bool/);
 assert.match(gui, /is_combo_descendant\(l as H, combo\)/);
 assert.match(gui, /theme_combo_children\(self\.controls\[18\]\)/);
 assert.match(settingsUi, /theme_combo_children\(h\)/);
+assert.match(settingsUi, /SetWindowLongPtrW\(handle, -4, dark_combo_proc as isize\)/);
 assert.match(settingsUi, /is_combo_descendant\(l as H, combo\)/);
 assert.match(gui, /draw_combo_chrome\(hwnd\)/);
-// The themed white frame is non-client chrome; paint it with a window DC
-// after both client and non-client painting, including focus/enable changes.
-assert.match(gui, /fn GetWindowDC\(hwnd: H\) -> H/);
-assert.match(gui, /unsafe fn draw_combo_nonclient_frame\(hwnd: H\)/);
-assert.match(gui, /let dc = GetWindowDC\(hwnd\)/);
-assert.match(gui, /GetWindowRect\(hwnd, &mut window\)/);
-assert.match(gui, /0x0085 => draw_combo_nonclient_frame\(hwnd\)/);
-assert.ok(gui.includes('draw_combo_chrome(hwnd);') && gui.includes('draw_combo_nonclient_frame(hwnd);'));
-assert.ok(gui.includes('0x0007 | 0x0008 | 0x000A | 0x0086'));
-const comboChrome = gui.slice(gui.indexOf('unsafe fn draw_combo_chrome'), gui.indexOf("// ComboBox's themed outer border"));
-assert.ok(!comboChrome.includes('MoveToEx(dc, 0, 0'));
+// ComboBox paints a separate inset frame around its selected-value area.
+// Repaint that client-area boundary (plus the outer edges) after WM_PAINT;
+// a window DC / WM_NCPAINT overlay cannot reach this inner frame.
+assert.match(gui, /unsafe fn draw_combo_frame\(dc: H, rect: &Rect, divider: i32, color: u32, thickness: i32\)/);
+assert.match(gui, /Rect \\{ left: split - t, top: t, right: split, bottom: rect\.bottom - t \\}/);
+assert.match(gui, /draw_combo_frame\(dc, &rect, arrow_left, border, thickness\)/);
+assert.match(gui, /0x000F => draw_combo_chrome\(hwnd\)/);
+assert.doesNotMatch(gui, /GetWindowDC|draw_combo_nonclient_frame/);
 assert.match(gui, /GetDpiForWindow/);
 assert.match(gui, /0x2c => \{ \/\/ WM_MEASUREITEM/);
 assert.match(settingsUi, /0x00010000 \| 0xB/);
