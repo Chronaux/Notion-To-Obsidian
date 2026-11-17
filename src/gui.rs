@@ -1,5 +1,5 @@
 #![allow(non_snake_case)]
-use notion_to_obsidian::{Converter, Report, options::ConversionOptions};
+use notion_to_obsidian::{Converter, Report, ExportPreview, options::ConversionOptions};
 #[path = "settings.rs"]
 mod settings;
 use std::{
@@ -561,6 +561,7 @@ fn count_event(message: &str, prefix: &str) -> Option<(usize, usize)> {
 enum Event {
     Message(String),
     Done(std::result::Result<Report, String>),
+    Preview(std::result::Result<ExportPreview, String>),
 }
 struct App {
     hwnd: H,
@@ -569,7 +570,7 @@ struct App {
     titlefont: H,
     bg_brush: H,
     field_brush: H,
-    button_procs: [isize; 6],
+    button_procs: [isize; 7],
     hover_button: Option<u32>,
     tooltip: H,
     help_text: Vec<u16>,
@@ -622,6 +623,7 @@ impl App {
             ("STATIC", "Профиль экспорта", 0, 0),
             ("COMBOBOX", "", 0x10000 | 0x00200000 | 0x3, 118),
             ("BUTTON", "Настроить…", 0x10000, 119),
+            ("BUTTON", "Предпросмотр", 0x10000, 120),
         ];
         for (class, text, style, id) in defs {
             let style = if class == "BUTTON" { (style & !0x0f) | 0xB } else { style };
@@ -684,7 +686,7 @@ impl App {
             SendMessageW(self.tooltip, 0x0418, 0, (360.0 * self.scale) as isize); // TTM_SETMAXTIPWIDTH
         }
         // Hover feedback and a pointing-hand cursor for action and help buttons.
-        for (slot, index) in [4usize, 7, 10, 14, 16, 19].iter().enumerate() {
+        for (slot, index) in [4usize, 7, 10, 14, 16, 19, 20].iter().enumerate() {
             self.button_procs[slot] =
                 SetWindowLongPtrW(self.controls[*index], -4, button_proc as isize);
         }
@@ -733,8 +735,9 @@ impl App {
             (m, v(305), roww, v(32)),              // Skip missing checkbox
             (m + v(155), v(74), v(22), v(22)),     // ZIP help tooltip trigger
             (m, v(236), roww, v(22)),              // Profile label
-            (m, v(261), roww - v(155), v(215)),   // Native profile dropdown
+            (m, v(261), roww - v(291), v(215)),   // Native profile dropdown
             (w - m - v(141), v(261), v(141), v(32)), // Configure profile
+            (w - m - v(282), v(261), v(135), v(32)), // Preview without writing
         ];
         for (i, (x, y, width, height)) in rows.iter().enumerate() {
             if *width > 0 {
@@ -783,10 +786,10 @@ impl App {
     unsafe fn set_busy(&mut self, busy: bool) {
         self.busy = busy;
         self.hover_button = None;
-        for i in [4usize, 7, 10, 14, 19] {
+        for i in [4usize, 7, 10, 14, 19, 20] {
             InvalidateRect(self.controls[i], null(), 0);
         }
-        for i in [3, 4, 6, 7, 11, 15, 18, 19] {
+        for i in [3, 4, 6, 7, 11, 15, 18, 19, 20] {
             EnableWindow(self.controls[i], (!busy) as i32);
         }
         self.cancel_requested = false;
@@ -839,6 +842,35 @@ impl App {
         InvalidateRect(self.hwnd, null(), 0);
     }
 
+    unsafe fn preview(&mut self) {
+        if self.busy { return; }
+        let archive = PathBuf::from(get(self.controls[3]).trim());
+        if !archive.is_file() {
+            dialog(self.hwnd, "Выберите ZIP-файл для предпросмотра.");
+            return;
+        }
+        let options = self.options.clone();
+        let skip_missing = self.skip_missing;
+        self.set_status_visible(true);
+        self.progress_visible = false;
+        self.open_ready = false;
+        ShowWindow(self.controls[14], 0);
+        set(self.controls[12], "Анализ структуры ZIP…");
+        set(self.controls[13], "Хранилище не создаётся");
+        self.set_busy(true);
+        self.stop = Arc::new(AtomicBool::new(false));
+        let stop = self.stop.clone();
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Converter::new(|_| {}, stop)
+                    .options(options).skip_missing_pages(skip_missing).preview(&archive)
+            })).unwrap_or_else(|_| Err("Не удалось построить предпросмотр.".into()));
+            let _ = tx.send(Event::Preview(result));
+        });
+    }
+
     unsafe fn on_message(&mut self, s: &str) {
         if self.cancel_requested { return; }
         if let Some((done, total)) = count_event(s, "Сопоставлено баз: ") {
@@ -888,6 +920,38 @@ impl App {
         for event in events {
             match event {
                 Event::Message(s) => self.on_message(&s),
+                Event::Preview(result) => {
+                    let cancelled = self.cancel_requested;
+                    self.set_busy(false);
+                    self.rx = None;
+                    match result {
+                        Ok(preview) if !cancelled => {
+                            set(self.controls[12], "Предпросмотр готов");
+                            set(self.controls[13], &format!(
+                                "{} страниц · {} баз · {} вложений", preview.pages, preview.databases, preview.attachments
+                            ));
+                            let mut explanation = format!(
+                                "Предварительная структура (без записи файлов)\n\nСтраниц: {}\nБаз данных: {}\nЗаписей: {}\nВложений: {}\nФайлов в дереве: {}\nПредупреждений: {}\n\nПервые пути:\n",
+                                preview.pages, preview.databases, preview.records, preview.attachments,
+                                preview.total_paths, preview.warnings.len());
+                            for path in preview.paths.iter().take(32) {
+                                explanation.push_str(path);
+                                explanation.push('\n');
+                            }
+                            MessageBoxW(self.hwnd, wide(&explanation).as_ptr(),
+                                wide("Предпросмотр экспорта").as_ptr(), 0x40);
+                        }
+                        Ok(_) => {
+                            set(self.controls[12], "Анализ отменён");
+                            set(self.controls[13], "Хранилище не создавалось");
+                        }
+                        Err(error) => {
+                            set(self.controls[12], "Не удалось проверить структуру");
+                            set(self.controls[13], "Хранилище не создавалось");
+                            if !cancelled { dialog(self.hwnd, &error); }
+                        }
+                    }
+                }
                 Event::Done(result) => {
                     let cancelled = self.cancel_requested;
                     self.set_busy(false);
@@ -1166,6 +1230,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                         app.set_status_visible(false);
                     }
                 },
+                120 if !app.busy => app.preview(),
                 106 => {
                     if app.busy {
                         if !app.cancel_requested {
@@ -1266,7 +1331,7 @@ pub fn launch(archive: Option<PathBuf>) {
             titlefont: 0,
             bg_brush: 0,
             field_brush: 0,
-            button_procs: [0; 6],
+            button_procs: [0; 7],
             hover_button: None,
             tooltip: 0,
             help_text: wide(ZIP_HELP),
