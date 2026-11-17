@@ -416,11 +416,9 @@ unsafe fn draw_combo_item(item: &DrawItem, font: H, scale: f32) {
     }
 }
 
-// CBS_DROPDOWNLIST creates an internal EDIT/STATIC child for the selected
-// value. The parent ComboBox theme does not theme that child, so its default
-// WS_BORDER/WS_EX_CLIENTEDGE produces the remaining white outline. Theme the
-// child itself and remove its redundant frame; the ComboBox owns the one dark
-// outer frame painted by dark_combo_proc.
+// CBS_DROPDOWNLIST may create an internal EDIT/STATIC child for the selected
+// value. Disable its visual-style frame and strip all common edge styles:
+ // the parent ComboBox paints the complete dark client frame after WM_PAINT.
 unsafe extern "system" fn theme_combo_child(hwnd: H, _param: isize) -> i32 {
     let mut class_name = [0u16; 32];
     let length = GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32);
@@ -429,11 +427,13 @@ unsafe extern "system" fn theme_combo_child(hwnd: H, _param: isize) -> i32 {
     }
     let class_name = String::from_utf16_lossy(&class_name[..length as usize]);
     if class_name.eq_ignore_ascii_case("EDIT") || class_name.eq_ignore_ascii_case("STATIC") {
-        SetWindowTheme(hwnd, wide("DarkMode_Explorer").as_ptr(), null());
+        // Empty theme names disable uxtheme for this child; a dark theme class
+        // can still paint its own inset edge even after WS_BORDER is removed.
+        SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
         let style = GetWindowLongPtrW(hwnd, -16); // GWL_STYLE
         let ex_style = GetWindowLongPtrW(hwnd, -20); // GWL_EXSTYLE
         let dark_style = style & !0x00800000; // WS_BORDER
-        let dark_ex_style = ex_style & !0x00000200; // WS_EX_CLIENTEDGE
+        let dark_ex_style = ex_style & !(0x00000200 | 0x00020000); // WS_EX_CLIENTEDGE | WS_EX_STATICEDGE
         let mut frame_changed = false;
         if dark_style != style {
             SetWindowLongPtrW(hwnd, -16, dark_style);
