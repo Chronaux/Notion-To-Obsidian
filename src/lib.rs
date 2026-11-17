@@ -563,6 +563,18 @@ pub struct Report {
     pub row_matching: Vec<Value>,
     pub audit: Value,
 }
+/// Predicted vault paths from the ZIP, without writing any files.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ExportPreview {
+    pub pages: usize,
+    pub databases: usize,
+    pub records: usize,
+    pub attachments: usize,
+    pub total_paths: usize,
+    /// First 100 resolved paths in sorted order.
+    pub paths: Vec<String>,
+    pub warnings: Vec<Warning>,
+}
 pub struct Converter {
     pages: Vec<Page>,
     dbs: Vec<Database>,
@@ -2360,6 +2372,36 @@ impl Converter {
             ));
         }
         Ok(())
+    }
+    /// Resolve all paths and CSV records without rendering or creating a vault.
+    pub fn preview(mut self, archive: &Path) -> Result<ExportPreview> {
+        self.options.validate()?;
+        let files = self.read_archive(archive)?;
+        self.inventory(&files)?;
+        self.validate_columns()?;
+        self.match_rows()?;
+        self.paths(&files);
+        let mut paths = self.pages.iter().map(|p| p.target.clone()).collect::<Vec<_>>();
+        for db in &self.dbs {
+            paths.push(db.target.clone());
+            if self.options.table_output(&db.uid).bases() {
+                paths.push(db.base.clone());
+            }
+        }
+        paths.extend(self.assets.values().cloned());
+        paths.sort();
+        paths.dedup();
+        let total_paths = paths.len();
+        paths.truncate(100);
+        Ok(ExportPreview {
+            pages: self.pages.len(),
+            databases: self.dbs.len(),
+            records: self.dbs.iter().map(|d| d.rows.len()).sum(),
+            attachments: self.assets.len(),
+            total_paths,
+            paths,
+            warnings: self.report.warnings,
+        })
     }
     pub fn inspect(mut self, archive: &Path) -> Result<Report> {
         self.options.validate()?;
