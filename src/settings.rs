@@ -18,6 +18,7 @@ struct Editor {
     bg: H,
     field: H,
     options: ConversionOptions,
+    checks: [bool; 4],
     accepted: bool,
 }
 impl Editor {
@@ -49,7 +50,7 @@ impl Editor {
         }
     }
     unsafe fn check(&mut self, id: isize, text: &str, x: i32, y: i32) {
-        self.add("BUTTON", text, 0x00010000 | 0x3, id, x, y, 335, 27);
+        self.add("BUTTON", text, 0x00010000 | 0xB, id, x, y, 335, 27);
     }
     unsafe fn edit(&mut self, id: isize, x: i32, y: i32) {
         self.add("EDIT", "", 0x00010000 | 0x00000080 | 0x00800000, id, x, y, 330, 29);
@@ -107,12 +108,6 @@ impl Editor {
     unsafe fn set_selected(&self, id: usize, selected: usize) {
         SendMessageW(self.child(id), 0x014E, selected, 0); // CB_SETCURSEL
     }
-    unsafe fn checked(&self, id: usize) -> bool {
-        SendMessageW(self.child(id), 0x00F0, 0, 0) != 0 // BM_GETCHECK
-    }
-    unsafe fn set_checked(&self, id: usize, checked: bool) {
-        SendMessageW(self.child(id), 0x00F1, checked as usize, 0); // BM_SETCHECK
-    }
     unsafe fn refresh(&self) {
         let o = &self.options;
         self.set_selected(600, if o.structure.sections == Sections::Source {0} else {1});
@@ -131,10 +126,12 @@ impl Editor {
         self.set_selected(609, match o.content.tags {
             Tags::Auto => 0, Tags::ConfiguredColumns => 1, Tags::Off => 2
         });
-        self.set_checked(610, o.databases.embed_in_articles);
-        self.set_checked(611, o.extras.start_note);
-        self.set_checked(612, o.extras.table_css);
-        self.set_checked(613, o.extras.table_plugin);
+        self.checks = [
+            o.databases.embed_in_articles,
+            o.extras.start_note,
+            o.extras.table_css,
+            o.extras.table_plugin,
+        ];
     }
     unsafe fn collect(&self) -> Result<ConversionOptions, String> {
         let mut o = self.options.clone();
@@ -156,10 +153,10 @@ impl Editor {
         o.content.tags = match self.selected(609) {
             1 => Tags::ConfiguredColumns, 2 => Tags::Off, _ => Tags::Auto
         };
-        o.databases.embed_in_articles = self.checked(610) && o.databases.output.markdown();
-        o.extras.start_note = self.checked(611);
-        o.extras.table_css = self.checked(612);
-        o.extras.table_plugin = self.checked(613);
+        o.databases.embed_in_articles = self.checks[0] && o.databases.output.markdown();
+        o.extras.start_note = self.checks[1];
+        o.extras.table_css = self.checks[2];
+        o.extras.table_plugin = self.checks[3];
         if o.profile != Profile::Custom {
             let base = o.profile;
             o.profile = Profile::Custom;
@@ -188,6 +185,60 @@ impl Editor {
         let length = name.iter().position(|&c| c == 0).unwrap_or(0);
         Some(PathBuf::from(String::from_utf16_lossy(&name[..length])))
     }
+}
+
+unsafe fn draw_settings_checkbox(item: &DrawItem, state: &Editor) {
+    let id = item.control_id as usize;
+    let index = id.saturating_sub(610).min(3);
+    let checked = state.checks[index];
+    let disabled = item.item_state & 0x0004 != 0; // ODS_DISABLED
+    let pressed = item.item_state & 0x0001 != 0; // ODS_SELECTED
+    let focused = item.item_state & 0x0010 != 0; // ODS_FOCUS
+    let hovered = item.item_state & 0x0040 != 0; // ODS_HOTLIGHT
+    let p = |n: i32| (n as f32 * state.scale).round() as i32;
+
+    let row_fill = if disabled { BG } else if pressed {
+        rgb(48, 43, 62)
+    } else if hovered {
+        rgb(34, 32, 41)
+    } else {
+        BG
+    };
+    rounded(item.dc, &item.rect, row_fill,
+        if focused { ACCENT } else { row_fill }, p(4));
+
+    let side = p(16);
+    let left = item.rect.left + p(2);
+    let center = (item.rect.top + item.rect.bottom) / 2;
+    let glyph = Rect {
+        left, top: center - side / 2,
+        right: left + side, bottom: center + side / 2,
+    };
+    rounded(item.dc, &glyph,
+        if checked && !disabled { ACCENT } else { FIELD },
+        if checked && !disabled { ACCENT } else if disabled { BORDER } else { MUTED },
+        p(4));
+    if checked && !disabled {
+        let mark = wide("✓");
+        let mut mark_rect = glyph;
+        SetBkMode(item.dc, 1);
+        SetTextColor(item.dc, TEXT);
+        let old = SelectObject(item.dc, state.font);
+        DrawTextW(item.dc, mark.as_ptr(), (mark.len() - 1) as i32,
+            &mut mark_rect, 0x1 | 0x4 | 0x20);
+        SelectObject(item.dc, old);
+    }
+
+    let label = wide(&get(item.hwnd));
+    let mut text_rect = item.rect;
+    text_rect.left += p(27);
+    text_rect.left = text_rect.left.min(text_rect.right);
+    SetBkMode(item.dc, 1);
+    SetTextColor(item.dc, if disabled { MUTED } else { TEXT });
+    let old = SelectObject(item.dc, state.font);
+    DrawTextW(item.dc, label.as_ptr(), (label.len() - 1) as i32,
+        &mut text_rect, 0x20 | 0x4 | 0x800 | 0x8000);
+    SelectObject(item.dc, old);
 }
 
 unsafe fn draw_settings_button(item: &DrawItem, state: &Editor) {
@@ -244,7 +295,7 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
             EndPaint(hwnd, &paint);
             0
         }
-        0x0133 | 0x0135 | 0x0138 | 0x0134 => {
+        0x0133 | 0x0134 | 0x0138 => {
             let edit = w != 0 && state.controls.iter().any(|&h| h == l as H && (h == state.child(602) || h == state.child(605)));
             let dc = w as H;
             SetBkMode(dc, 1);
@@ -259,7 +310,12 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
                     draw_settings_button(item, state);
                     return 1;
                 }
-                if item.control_type == 2 && matches!(item.control_id, 600..=609) {
+                if item.control_type == 4 && matches!(item.control_id, 610..=613) {
+                    draw_settings_checkbox(item, state);
+                    return 1;
+                }
+                // ODT_COMBOBOX is 3; ODT_LISTBOX (2) is not sent for CBS_OWNERDRAWFIXED.
+                if item.control_type == 3 && matches!(item.control_id, 600..=609) {
                     draw_combo_item(item, state.font, state.scale);
                     return 1;
                 }
@@ -269,7 +325,7 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
         0x002C => { // WM_MEASUREITEM
             if l != 0 {
                 let measure = &mut *(l as *mut MeasureItem);
-                if measure.control_type == 2 && matches!(measure.control_id, 600..=609) {
+                if measure.control_type == 3 && matches!(measure.control_id, 600..=609) {
                     measure.item_height = (28.0 * state.scale).round() as u32;
                     return 1;
                 }
@@ -278,6 +334,11 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
         }
         0x0111 => {
             match w & 0xffff {
+                610..=613 if (w >> 16) & 0xffff == 0 => {
+                    let index = (w & 0xffff) as usize - 610;
+                    state.checks[index] = !state.checks[index];
+                    InvalidateRect(state.child(index + 610), null(), 0);
+                },
                 614 => if let Some(path) = state.json_path(false) {
                     match ConversionOptions::load(&path) {
                         Ok(options) => {state.options = options; state.refresh();},
@@ -328,7 +389,7 @@ pub unsafe fn show(parent: H, options: &ConversionOptions, scale: f32) -> Option
     RegisterClassExW(&cls);
     let mut state = Box::new(Editor {
         hwnd: 0, parent, scale, controls: vec![], font: 0, bg: 0, field: 0,
-        options: options.clone(), accepted: false,
+        options: options.clone(), checks: [false; 4], accepted: false,
     });
     let ptr: *mut Editor = &mut *state;
     let width = (756.0 * scale) as i32;
