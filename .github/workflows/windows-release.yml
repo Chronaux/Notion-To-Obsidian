@@ -90,7 +90,7 @@ jobs:
           a = "a" * 32
           b = "b" * 32
           with ZipFile("fixture.zip", "w") as z:
-              z.writestr(f"Root {a}.md", f"# Root\n\n## Учитель\n\n[Article](Root/Article%20{b}.md)")
+              z.writestr(f"Root {a}.md", f"# Root\n\n## Раздел\n\n[Article](Root/Article%20{b}.md)")
               z.writestr(f"Root/Article {b}.md", "# Article\n\n## First\n\nFirst body\n\n## Second\n\nSecond body")
           '@
           $fixture_script | python -

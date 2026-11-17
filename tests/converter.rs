@@ -332,7 +332,7 @@ fn full_properties_native_tags_and_headers() {
     );
     let mut w = csv::Writer::from_writer(vec![]);
     w.write_record(["Вопрос", "Ответ", "Теги"]).unwrap();
-    w.write_record(["Проверка", &answer, "Веб Учитель, МЭШ"])
+    w.write_record(["Проверка", &answer, "Раздел А, Пример"])
         .unwrap();
     let csv = String::from_utf8(w.into_inner().unwrap()).unwrap();
     let p = archive(
@@ -342,7 +342,7 @@ fn full_properties_native_tags_and_headers() {
             s(format!("DB {D}_all.csv"), csv),
             s(
                 format!("DB/Проверка {B}.md"),
-                format!("# Проверка\n\nОтвет: {answer}\nТеги: Веб Учитель, МЭШ"),
+                format!("# Проверка\n\nОтвет: {answer}\nТеги: Раздел А, Пример"),
             ),
         ],
     );
@@ -362,7 +362,7 @@ fn full_properties_native_tags_and_headers() {
     for generated in ["title", "folder", "cssclasses"] {
         assert!(meta.get(generated).is_none(), "{generated}");
     }
-    assert_eq!(meta["tags"], serde_json::json!(["Веб_Учитель", "МЭШ"]));
+    assert_eq!(meta["tags"], serde_json::json!(["Раздел_А", "Пример"]));
     assert!(meta
         .as_object()
         .unwrap()
@@ -404,13 +404,13 @@ fn no_synthetic_folder_summaries_but_page_toc_is_kept() {
         t.path(),
         vec![
             s(
-                format!("Инструкция {A}.md"),
+                format!("Материалы {A}.md"),
                 format!(
-                    "# Инструкция\n\n## Веб Учитель\n\n[Статья](Инструкция/Статья%20{B}.md)\n\n## Веб Организация\n\nДругой раздел"
+                    "# Материалы\n\n## Раздел А\n\n[Статья](Материалы/Статья%20{B}.md)\n\n## Раздел Б\n\nДругой раздел"
                 ),
             ),
             s(
-                format!("Инструкция/Статья {B}.md"),
+                format!("Материалы/Статья {B}.md"),
                 "# Статья\n\n## Первое\n\nСодержание первой темы\n\n## Второе\n\nСодержание второй темы",
             ),
         ],
@@ -423,12 +423,12 @@ fn no_synthetic_folder_summaries_but_page_toc_is_kept() {
     assert!(article.contains("**Содержание**"));
     assert!(article.contains("[[#Первое|Первое]]"));
     assert!(article.contains("[[#Второе|Второе]]"));
-    let unwanted = out.join("Инструкция/Веб Учитель/Оглавление.md");
+    let unwanted = out.join("Материалы/Раздел А/Оглавление.md");
     assert!(!unwanted.exists(), "a folder must not get a generated index note");
-    assert!(!out.join("Инструкция/Веб Организация/Оглавление.md").exists());
+    assert!(!out.join("Материалы/Раздел Б/Оглавление.md").exists());
     let root_doc = fs::read_to_string(out.join(&report.mapping[A])).unwrap();
-    assert!(root_doc.contains("Веб Учитель"));
-    assert!(root_doc.contains("Веб Организация"));
+    assert!(root_doc.contains("Раздел А"));
+    assert!(root_doc.contains("Раздел Б"));
 }
 
 #[test]
@@ -438,17 +438,17 @@ fn a_real_page_named_oglavlenie_is_preserved() {
         t.path(),
         vec![
             s(
-                format!("Инструкция {A}.md"),
-                format!("# Инструкция\n\n## Веб Учитель\n\n[Оглавление](Инструкция/Оглавление%20{B}.md)"),
+                format!("Материалы {A}.md"),
+                format!("# Материалы\n\n## Раздел А\n\n[Оглавление](Материалы/Оглавление%20{B}.md)"),
             ),
-            s(format!("Инструкция/Оглавление {B}.md"), "# Оглавление\n\nРеальная заметка Notion"),
+            s(format!("Материалы/Оглавление {B}.md"), "# Оглавление\n\nРеальная заметка Notion"),
         ],
     );
     let out = t.path().join("out");
     let report = convert(&p, &out).unwrap();
     let note = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
     assert!(note.contains("Реальная заметка Notion"));
-    assert_eq!(report.mapping[B], "Инструкция/Веб Учитель/Оглавление.md");
+    assert_eq!(report.mapping[B], "Материалы/Раздел А/Оглавление.md");
     assert_eq!(report.audit["passed"], true);
 }
 
@@ -461,36 +461,36 @@ fn parent_page_and_subpages_share_one_folder_without_duplicate_sibling() {
         t.path(),
         vec![
             s(
-                format!("Инструкция {A}.md"),
-                format!("# Инструкция\n\n## Веб Учитель\n\n[Поурочное планирование](Инструкция/Поурочное%20планирование%20{B}.md)"),
+                format!("Материалы {A}.md"),
+                format!("# Материалы\n\n## Раздел А\n\n[Проект](Материалы/Проект%20{B}.md)"),
             ),
             s(
-                format!("Инструкция/Поурочное планирование {B}.md"),
-                format!("# Поурочное планирование\n\n[Первый](Поурочное%20планирование/Первый%20{child_one}.md)\n[Второй](Поурочное%20планирование/Второй%20{child_two}.md)"),
+                format!("Материалы/Проект {B}.md"),
+                format!("# Проект\n\n[Первый](Проект/Первый%20{child_one}.md)\n[Второй](Проект/Второй%20{child_two}.md)"),
             ),
             s(
-                format!("Инструкция/Поурочное планирование/Первый {child_one}.md"),
+                format!("Материалы/Проект/Первый {child_one}.md"),
                 "# Первый\n\nТекст первой страницы",
             ),
             s(
-                format!("Инструкция/Поурочное планирование/Второй {child_two}.md"),
+                format!("Материалы/Проект/Второй {child_two}.md"),
                 "# Второй\n\nТекст второй страницы",
             ),
         ],
     );
     let out = t.path().join("out");
     let report = convert(&p, &out).unwrap();
-    let dir = "Инструкция/Веб Учитель/Поурочное планирование";
-    assert_eq!(report.mapping[B], format!("{dir}/Поурочное планирование.md"));
+    let dir = "Материалы/Раздел А/Проект";
+    assert_eq!(report.mapping[B], format!("{dir}/Проект.md"));
     assert_eq!(report.mapping[child_one], format!("{dir}/Первый.md"));
     assert_eq!(report.mapping[child_two], format!("{dir}/Второй.md"));
-    assert!(!out.join("Инструкция/Веб Учитель/Поурочное планирование.md").exists());
+    assert!(!out.join("Материалы/Раздел А/Проект.md").exists());
     let parent = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
     assert!(parent.contains(&format!("[[{dir}/Первый|Первый]]")));
     assert!(parent.contains(&format!("[[{dir}/Второй|Второй]]")));
     assert!(fs::read_to_string(out.join(&report.mapping[child_one])).unwrap().contains("Текст первой"));
     let root_note = fs::read_to_string(out.join(&report.mapping[A])).unwrap();
-    assert!(root_note.contains(&format!("[[{dir}/Поурочное планирование|Поурочное планирование]]")));
+    assert!(root_note.contains(&format!("[[{dir}/Проект|Проект]]")));
     assert_eq!(report.audit["passed"], true);
 }
 
@@ -498,17 +498,17 @@ fn parent_page_and_subpages_share_one_folder_without_duplicate_sibling() {
 fn hierarchy_uses_headings_and_preserves_distinct_same_title() {
     let t = root();
     let c = "cccccccccccccccccccccccccccccccc";
-    let p=archive(t.path(),vec![s(format!("Инструкция {A}.md"),format!("# Инструкция\n\n## Веб Учитель\n\n[ДЗ](Инструкция/Домашние%20задания%20{B}.md)\n\n## Веб Организация\n\n[ДЗ](Инструкция/Домашние%20задания%20{c}.md)")),s(format!("Инструкция/Домашние задания {B}.md"),"# Домашние задания\n\nТэг: Веб Учитель\n\n[Child](Домашние%20задания/Child%20dddddddddddddddddddddddddddddddd.md)"),s(format!("Инструкция/Домашние задания {c}.md"),"# Домашние задания\n\nТэг: Веб Организация"),s(format!("Инструкция/Домашние задания/Child {D}.md"),"# Child")]);
+    let p=archive(t.path(),vec![s(format!("Материалы {A}.md"),format!("# Материалы\n\n## Раздел А\n\n[ДЗ](Материалы/Задачи%20{B}.md)\n\n## Раздел Б\n\n[ДЗ](Материалы/Задачи%20{c}.md)")),s(format!("Материалы/Задачи {B}.md"),"# Задачи\n\nТэг: Раздел А\n\n[Child](Задачи/Child%20dddddddddddddddddddddddddddddddd.md)"),s(format!("Материалы/Задачи {c}.md"),"# Задачи\n\nТэг: Раздел Б"),s(format!("Материалы/Задачи/Child {D}.md"),"# Child")]);
     let out = t.path().join("out");
     let r = convert(&p, &out).unwrap();
-    assert_eq!(r.mapping[B], "Инструкция/Веб Учитель/Домашние задания/Домашние задания.md");
+    assert_eq!(r.mapping[B], "Материалы/Раздел А/Задачи/Задачи.md");
     assert_eq!(
         r.mapping[c],
-        "Инструкция/Веб Организация/Домашние задания.md"
+        "Материалы/Раздел Б/Задачи.md"
     );
     assert_eq!(
         r.mapping[D],
-        "Инструкция/Веб Учитель/Домашние задания/Child.md"
+        "Материалы/Раздел А/Задачи/Child.md"
     );
     let text = fs::read_to_string(out.clone().join(&r.mapping[B])).unwrap();
     let meta: serde_json::Value = serde_json::from_str(
@@ -519,7 +519,7 @@ fn hierarchy_uses_headings_and_preserves_distinct_same_title() {
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(meta["tags"], serde_json::json!(["Веб_Учитель"]));
+    assert_eq!(meta["tags"], serde_json::json!(["Раздел_А"]));
     assert!(!text.split("\n---\n").nth(1).unwrap().contains("Тэг:"));
 }
 #[test]
@@ -530,7 +530,7 @@ fn table_links_survive_and_tags_preserve_single_multiword_label() {
     w.write_record([
         "Row",
         &format!("Откройте https://app.notion.com/p/{B}"),
-        "Веб Учитель",
+        "Раздел А",
     ])
     .unwrap();
     let csv = String::from_utf8(w.into_inner().unwrap()).unwrap();
@@ -541,7 +541,7 @@ fn table_links_survive_and_tags_preserve_single_multiword_label() {
             s(format!("DB {D}_all.csv"), csv),
             s(
                 format!("DB/Row {B}.md"),
-                format!("# Row\n\nОтвет: Откройте https://app.notion.com/p/{B}\nТег: Веб Учитель"),
+                format!("# Row\n\nОтвет: Откройте https://app.notion.com/p/{B}\nТег: Раздел А"),
             ),
         ],
     );
@@ -679,42 +679,42 @@ fn database_parent_stays_in_article_tree_while_tables_move_to_database_root() {
         t.path(),
         vec![
             s(
-                format!("Инструкция {A}.md"),
-                format!("# Инструкция\n\n## Веб Учитель\n\n[Поурочное планирование](Инструкция/Поурочное%20планирование%20{B}.md)"),
+                format!("Материалы {A}.md"),
+                format!("# Материалы\n\n## Раздел А\n\n[Проект](Материалы/Проект%20{B}.md)"),
             ),
             s(
-                format!("Инструкция/Поурочное планирование {B}.md"),
-                format!("# Поурочное планирование\n\n[Поурочное планирование](Поурочное%20планирование%20{D}.csv)"),
+                format!("Материалы/Проект {B}.md"),
+                format!("# Проект\n\n[Проект](Проект%20{D}.csv)"),
             ),
             s(
-                format!("Инструкция/Поурочное планирование {D}_all.csv"),
-                "Название,Описание\nЗанятие,Содержание\n",
+                format!("Материалы/Проект {D}_all.csv"),
+                "Название,Описание\nЗапись,Содержание\n",
             ),
             s(
-                format!("Инструкция/Поурочное планирование/Занятие {}.md", "c".repeat(32)),
-                "# Занятие\n\nОписание: Содержание",
+                format!("Материалы/Проект/Запись {}.md", "c".repeat(32)),
+                "# Запись\n\nОписание: Содержание",
             ),
         ],
     );
     let out = t.path().join("out");
     let report = convert(&p, &out).unwrap();
-    let folder = "Базы данных/Инструкция/Веб Учитель/Поурочное планирование";
-    assert_eq!(report.mapping[B], "Инструкция/Веб Учитель/Поурочное планирование.md");
-    assert!(!out.join("Инструкция/Веб Учитель/Поурочное планирование/Поурочное планирование.md").exists());
+    let folder = "Базы данных/Материалы/Раздел А/Проект";
+    assert_eq!(report.mapping[B], "Материалы/Раздел А/Проект.md");
+    assert!(!out.join("Материалы/Раздел А/Проект/Проект.md").exists());
     let table = report.databases[0]["readable_table"].as_str().unwrap();
-    assert_eq!(table, format!("{folder}/Поурочное планирование.md"));
+    assert_eq!(table, format!("{folder}/Проект.md"));
     assert_eq!(
         report.databases[0]["base"].as_str().unwrap(),
-        format!("{folder}/Поурочное планирование.base")
+        format!("{folder}/Проект.base")
     );
     assert!(out.join(table).is_file());
     assert!(out.join(report.databases[0]["base"].as_str().unwrap()).is_file());
     let row = "c".repeat(32);
-    assert_eq!(report.mapping[&row], format!("{folder}/Занятие.md"));
+    assert_eq!(report.mapping[&row], format!("{folder}/Запись.md"));
     let page = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
     let table_link = table.trim_end_matches(".md");
     assert!(page.contains(&format!("![[{table_link}#^notion-table]]")));
-    assert!(page.contains("# Поурочное планирование"));
+    assert!(page.contains("# Проект"));
     assert_eq!(report.audit["passed"], true);
 }
 
@@ -725,8 +725,8 @@ fn standalone_parent_stays_in_root_and_records_move_to_database_root() {
         t.path(),
         vec![
             s(format!("План {A}.md"), format!("# План\n\n[База](План%20{D}.csv)")),
-            s(format!("План {D}_all.csv"), "Name,Answer\nЗанятие,Текст\n"),
-            s(format!("План/Занятие {B}.md"), "# Занятие\n\nAnswer: Текст"),
+            s(format!("План {D}_all.csv"), "Name,Answer\nЗапись,Текст\n"),
+            s(format!("План/Запись {B}.md"), "# Запись\n\nAnswer: Текст"),
         ],
     );
     let out = t.path().join("out");
@@ -738,8 +738,8 @@ fn standalone_parent_stays_in_root_and_records_move_to_database_root() {
         "Базы данных/План/План.md"
     );
     assert!(out.join("Базы данных/План/План.md").exists());
-    assert_eq!(report.mapping[B], "Базы данных/План/Занятие.md");
-    assert!(!out.join("План/Занятие.md").exists());
+    assert_eq!(report.mapping[B], "Базы данных/План/Запись.md");
+    assert!(!out.join("План/Запись.md").exists());
     assert_eq!(report.audit["passed"], true);
 }
 
@@ -752,7 +752,7 @@ fn database_parent_stays_with_empty_database_without_row_folder() {
         vec![
             s(
                 format!("Главная {A}.md"),
-                format!("# Главная\n\n## Учитель\n\n[План](Главная/План%20{B}.md)"),
+                format!("# Главная\n\n## Команда\n\n[План](Главная/План%20{B}.md)"),
             ),
             s(
                 format!("Главная/План {B}.md"),
@@ -763,10 +763,10 @@ fn database_parent_stays_with_empty_database_without_row_folder() {
     );
     let out = t.path().join("out");
     let report = convert(&p, &out).unwrap();
-    assert_eq!(report.mapping[B], "Главная/Учитель/План.md");
-    assert!(!out.join("Главная/Учитель/План/План.md").exists());
-    assert!(out.join("Базы данных/Главная/Учитель/План/План.md").is_file());
-    assert!(out.join("Базы данных/Главная/Учитель/План/План.base").is_file());
+    assert_eq!(report.mapping[B], "Главная/Команда/План.md");
+    assert!(!out.join("Главная/Команда/План/План.md").exists());
+    assert!(out.join("Базы данных/Главная/Команда/План/План.md").is_file());
+    assert!(out.join("Базы данных/Главная/Команда/План/План.base").is_file());
     assert_eq!(report.audit["passed"], true);
 }
 
@@ -781,38 +781,38 @@ fn nested_database_subpages_follow_records_and_unrelated_pages_stay_in_instructi
         t.path(),
         vec![
             s(
-                format!("Инструкция {A}.md"),
-                format!("# Инструкция\n\n## Учитель\n\n[Задания](Инструкция/Задания%20{B}.md)"),
+                format!("Материалы {A}.md"),
+                format!("# Материалы\n\n## Команда\n\n[Задания](Материалы/Задания%20{B}.md)"),
             ),
             s(
-                format!("Инструкция/Задания {B}.md"),
+                format!("Материалы/Задания {B}.md"),
                 format!("# Задания\n\n[Таблица](Задания%20{D}.csv)\n\n[Ряд](Задания/Ряд%20{row_id}.md)"),
             ),
             s(
-                format!("Инструкция/Задания {D}_all.csv"),
+                format!("Материалы/Задания {D}_all.csv"),
                 "Имя,Ответ\nРяд,Да\n",
             ),
             s(
-                format!("Инструкция/Задания/Ряд {row_id}.md"),
+                format!("Материалы/Задания/Ряд {row_id}.md"),
                 format!("# Ряд\n\nОтвет: Да\n\n[Детали](Ряд/Детали%20{child_id}.md)"),
             ),
             s(
-                format!("Инструкция/Задания/Ряд/Детали {child_id}.md"),
+                format!("Материалы/Задания/Ряд/Детали {child_id}.md"),
                 "# Детали\n\nПодробности",
             ),
             s(
-                format!("Инструкция/Побочная {other_id}.md"),
+                format!("Материалы/Побочная {other_id}.md"),
                 "# Побочная\n\nОбычная страница инструкции",
             ),
         ],
     );
     let out = t.path().join("out");
     let report = convert(&p, &out).unwrap();
-    let folder = "Базы данных/Инструкция/Учитель/Задания";
-    assert_eq!(report.mapping[B], "Инструкция/Учитель/Задания.md");
+    let folder = "Базы данных/Материалы/Команда/Задания";
+    assert_eq!(report.mapping[B], "Материалы/Команда/Задания.md");
     assert_eq!(report.mapping[row_id], format!("{folder}/Ряд/Ряд.md"));
     assert_eq!(report.mapping[child_id], format!("{folder}/Ряд/Детали.md"));
-    assert!(report.mapping[other_id].starts_with("Инструкция/"));
+    assert!(report.mapping[other_id].starts_with("Материалы/"));
     assert!(!report.mapping[other_id].starts_with("Базы данных/"));
     let article = fs::read_to_string(out.join(&report.mapping[B])).unwrap();
     assert!(article.contains(&format!("![[{folder}/Задания#^notion-table]]")));
@@ -836,29 +836,29 @@ fn databases_with_same_title_in_distinct_sections_do_not_merge() {
     let p = archive(
         t.path(),
         vec![
-            s(format!("Инструкция {A}.md"), "# Инструкция"),
+            s(format!("Материалы {A}.md"), "# Материалы"),
             s(
-                format!("Инструкция/Учитель/Планы {B}.md"),
+                format!("Материалы/Команда/Планы {B}.md"),
                 format!("# Планы\n\n[Таблица](Планы%20{D}.csv)"),
             ),
             s(
-                format!("Инструкция/Админ/Планы {second_page}.md"),
+                format!("Материалы/Участник/Планы {second_page}.md"),
                 format!("# Планы\n\n[Таблица](Планы%20{second_database}.csv)"),
             ),
             s(
-                format!("Инструкция/Учитель/Планы {D}_all.csv"),
+                format!("Материалы/Команда/Планы {D}_all.csv"),
                 "Имя,Ответ\nПервый,Да\n",
             ),
             s(
-                format!("Инструкция/Админ/Планы {second_database}_all.csv"),
+                format!("Материалы/Участник/Планы {second_database}_all.csv"),
                 "Имя,Ответ\nВторой,Нет\n",
             ),
             s(
-                format!("Инструкция/Учитель/Планы/Первый {first_row}.md"),
+                format!("Материалы/Команда/Планы/Первый {first_row}.md"),
                 "# Первый\n\nОтвет: Да",
             ),
             s(
-                format!("Инструкция/Админ/Планы/Второй {second_row}.md"),
+                format!("Материалы/Участник/Планы/Второй {second_row}.md"),
                 "# Второй\n\nОтвет: Нет",
             ),
         ],
@@ -866,19 +866,19 @@ fn databases_with_same_title_in_distinct_sections_do_not_merge() {
     let out = t.path().join("out");
     let report = convert(&p, &out).unwrap();
     assert_eq!(report.audit["passed"], true);
-    assert_eq!(report.mapping[B], "Инструкция/Учитель/Планы.md");
-    assert_eq!(report.mapping[second_page], "Инструкция/Админ/Планы.md");
+    assert_eq!(report.mapping[B], "Материалы/Команда/Планы.md");
+    assert_eq!(report.mapping[second_page], "Материалы/Участник/Планы.md");
     assert_eq!(
         report.mapping[first_row],
-        "Базы данных/Инструкция/Учитель/Планы/Первый.md"
+        "Базы данных/Материалы/Команда/Планы/Первый.md"
     );
     assert_eq!(
         report.mapping[second_row],
-        "Базы данных/Инструкция/Админ/Планы/Второй.md"
+        "Базы данных/Материалы/Участник/Планы/Второй.md"
     );
     for db in &report.databases {
         let table = db["readable_table"].as_str().unwrap();
-        assert!(table.starts_with("Базы данных/Инструкция/"));
+        assert!(table.starts_with("Базы данных/Материалы/"));
         assert!(out.join(table).exists());
     }
     assert_ne!(report.databases[0]["readable_table"], report.databases[1]["readable_table"]);
