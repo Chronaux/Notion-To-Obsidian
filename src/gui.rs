@@ -66,6 +66,13 @@ const TEXT: u32 = rgb(242, 241, 244);
 const MUTED: u32 = rgb(162, 160, 169);
 const ACCENT: u32 = rgb(119, 91, 237);
 const TRACK: u32 = rgb(43, 41, 46);
+// Keep the dark field background independent from the smaller, vertically
+// centered native EDIT control. Win32 one-line EDIT does not center its text
+// within a tall window, even when the height matches the painted field.
+const FIELD_TOPS: [i32; 2] = [103, 183];
+const FIELD_HEIGHT: i32 = 44;
+const EDIT_HEIGHT: i32 = 24;
+const BROWSE_HEIGHT: i32 = 34;
 #[repr(C)]
 struct Msg {
     hwnd: H,
@@ -351,9 +358,10 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
     let v = |n: i32| (n as f32 * app.scale).round() as i32;
     let m = v(12);
     rule(dc, m, v(58), client.right - m);
-    for y in [103, 183] {
+    for y in FIELD_TOPS {
         rounded(dc, &Rect {
-            left: m, top: v(y), right: client.right - m, bottom: v(y + 44),
+            left: m, top: v(y), right: client.right - m,
+            bottom: v(y + FIELD_HEIGHT),
         }, FIELD, FIELD, v(14));
     }
     rule(dc, m, v(346), client.right - m);
@@ -583,7 +591,11 @@ impl App {
         ShowWindow(self.controls[11], 0);
         ShowWindow(self.controls[14], 0);
         for i in [3usize, 6] {
-            SendMessageW(self.controls[i], 0x00D3, 3, (14 << 16) | 14);
+            // EM_SETMARGINS is horizontal only. Vertical alignment comes from
+            // centering a single-line EDIT in the larger painted field.
+            let margin = (8.0 * self.scale).round() as usize;
+            SendMessageW(self.controls[i], 0x00D3, 3,
+                ((margin << 16) | margin) as isize);
             SetWindowTheme(self.controls[i], wide("DarkMode_Explorer").as_ptr(), null());
         }
         // Hover feedback and a pointing-hand cursor for every action button.
@@ -606,17 +618,28 @@ impl App {
         let action_gap = v(10);
         let check_w = ((roww - action_gap) * 34 / 100).max(v(180));
         let browse_w = v(88);
-        let input_w = (roww - browse_w - v(14)).max(v(180));
+        let browse_x = w - m - browse_w - v(6);
+        let edit_x = m + v(6);
+        let edit_w = (browse_x - v(12) - edit_x).max(v(180));
         let status_w = (roww - v(188)).max(v(280));
+        let field_h = v(FIELD_HEIGHT);
+        let edit_h = v(EDIT_HEIGHT);
+        let browse_h = v(BROWSE_HEIGHT);
+        let zip_top = v(FIELD_TOPS[0]);
+        let output_top = v(FIELD_TOPS[1]);
+        // Both controls share the same field center at every display scale.
+        let centered_y = |top: i32, child_height: i32| {
+            top + (field_h - child_height) / 2
+        };
         let rows = [
             (m, v(14), roww * 60 / 100, v(28)),  // App title
             (w - m - v(245), v(17), v(245), v(24)), // Privacy note
             (m, v(75), roww, v(22)),             // ZIP label
-            (m + v(12), v(105), input_w - v(8), v(40)), // ZIP: vertically centered native edit
-            (w - m - browse_w - v(6), v(108), browse_w, v(34)), // ZIP chooser
+            (edit_x, centered_y(zip_top, edit_h), edit_w, edit_h), // ZIP text
+            (browse_x, centered_y(zip_top, browse_h), browse_w, browse_h), // ZIP chooser
             (m, v(154), roww, v(22)),             // Output label
-            (m + v(12), v(185), input_w - v(8), v(40)), // Output: vertically centered native edit
-            (w - m - browse_w - v(6), v(188), browse_w, v(34)), // Output chooser
+            (edit_x, centered_y(output_top, edit_h), edit_w, edit_h), // Output text
+            (browse_x, centered_y(output_top, browse_h), browse_w, browse_h), // Output chooser
             (0, 0, 0, 0),                         // unused
             (m, v(281), check_w, v(49)),         // Secondary action
             (m + check_w + action_gap, v(281), roww - check_w - action_gap, v(49)),

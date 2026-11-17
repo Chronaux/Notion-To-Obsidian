@@ -64,7 +64,31 @@ assert.match(gui, /IsWindowEnabled/);
 assert.match(gui, /wide\("Нажмите «Обзор» или перетащите ZIP"\)/);
 assert.match(gui, /caption = wide\("Обзор"\)/);
 assert.match(gui, /"Результат будет создан в новой папке/);
-assert.match(gui, /v\(105\), input_w - v\(8\), v\(40\)/);
+// A full-height native one-line EDIT top-aligns glyphs: keep a smaller
+// control centered vertically within the independently painted rounded field.
+assert.match(gui, /const FIELD_TOPS: \[i32; 2\] = \[103, 183\]/);
+assert.match(gui, /const FIELD_HEIGHT: i32 = 44/);
+assert.match(gui, /const EDIT_HEIGHT: i32 = 24/);
+assert.match(gui, /let centered_y = \|top: i32, child_height: i32\|/);
+assert.match(gui, /\(edit_x, centered_y\(zip_top, edit_h\), edit_w, edit_h\)/);
+assert.match(gui, /\(edit_x, centered_y\(output_top, edit_h\), edit_w, edit_h\)/);
+assert.match(gui, /\(browse_x, centered_y\(zip_top, browse_h\), browse_w, browse_h\)/);
+assert.match(gui, /\(browse_x, centered_y\(output_top, browse_h\), browse_w, browse_h\)/);
+assert.doesNotMatch(gui, /v\(105\), input_w/);
+// Simulate layout rounding at common Windows DPI settings. Both EDIT controls
+// and both browse buttons must share the field's center to within 0.5 px.
+for (const scale of [1, 1.25, 1.5, 2]) {
+  const v = n => Math.round(n * scale);
+  for (const top of [103, 183]) {
+    for (const childHeight of [24, 34]) {
+      const fieldY = v(top);
+      const h = v(childHeight);
+      const childY = fieldY + Math.floor((v(44) - h) / 2);
+      assert.ok(Math.abs(childY + h / 2 - (fieldY + v(44) / 2)) <= 0.5,
+        'Control vertical center must match painted field at DPI scale ' + scale);
+    }
+  }
+}
 // The tested ZIP is staged as a draft release, bypassing Actions artifact quota.
 assert.match(workflow, /gh release create/);
 assert.match(workflow, /--draft/);
