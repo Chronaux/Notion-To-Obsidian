@@ -458,6 +458,24 @@ unsafe fn theme_combo_children(hwnd: H) {
     }
 }
 
+// The ComboBox itself must not use a themed frame: DarkMode_Explorer still
+// paints a bright inset around CBS_DROPDOWNLIST's selected-value area.
+// Disable UxTheme on the parent and its internal display child, then let the
+// shared subclass paint the complete client chrome with our GDI palette.
+unsafe fn apply_dark_combo(hwnd: H) {
+    if hwnd == 0 {
+        return;
+    }
+    let no_theme = wide("");
+    SetWindowTheme(hwnd, no_theme.as_ptr(), no_theme.as_ptr());
+    theme_combo_children(hwnd);
+    let previous = SetWindowLongPtrW(hwnd, -4, dark_combo_proc as isize);
+    if previous != 0 {
+        SetWindowLongPtrW(hwnd, -21, previous);
+    }
+    InvalidateRect(hwnd, null(), 1);
+}
+
 unsafe fn is_combo_descendant(hwnd: H, combo: H) -> bool {
     let mut parent = GetParent(hwnd);
     while parent != 0 {
@@ -849,10 +867,7 @@ impl App {
             SendMessageW(self.controls[18], 0x0143, 0, wide(label).as_ptr() as isize);
         }
         SendMessageW(self.controls[18], 0x014E, 1, 0);
-        SetWindowTheme(self.controls[18], wide("DarkMode_Explorer").as_ptr(), null());
-        theme_combo_children(self.controls[18]);
-        let combo_previous = SetWindowLongPtrW(self.controls[18], -4, dark_combo_proc as isize);
-        SetWindowLongPtrW(self.controls[18], -21, combo_previous);
+        apply_dark_combo(self.controls[18]);
         let default = std::env::var_os("USERPROFILE")
             .map(PathBuf::from).unwrap_or(PathBuf::from("."))
             .join("Documents").join("Notion_Obsidian");
