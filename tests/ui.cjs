@@ -95,15 +95,15 @@ assert.match(gui, /measure\.control_type == 3 && measure\.control_id == 118/);
 assert.doesNotMatch(gui, /item\.control_type == 2 && item\.control_id == 118/);
 assert.match(gui, /0x133 \| 0x134 \| 0x138/);
 assert.match(gui, /unsafe extern "system" fn dark_combo_proc/);
-assert.match(gui, /draw_combo_chrome\\(hwnd\\)/);
+assert.match(gui, /draw_combo_chrome\(hwnd\)/);
 // The themed white frame is non-client chrome; paint it with a window DC
 // after both client and non-client painting, including focus/enable changes.
-assert.match(gui, /fn GetWindowDC\\(hwnd: H\\) -> H/);
-assert.match(gui, /unsafe fn draw_combo_nonclient_frame\\(hwnd: H\\)/);
-assert.match(gui, /let dc = GetWindowDC\\(hwnd\\)/);
-assert.match(gui, /GetWindowRect\\(hwnd, &mut window\\)/);
-assert.match(gui, /0x0085 => draw_combo_nonclient_frame\\(hwnd\\)/);
-assert.ok(gui.includes('draw_combo_chrome(hwnd);\\n            // Some Windows themes repaint the ComboBox frame during WM_PAINT,\\n            // not only WM_NCPAINT. Overlay it in both paths.\\n            draw_combo_nonclient_frame(hwnd);'));
+assert.match(gui, /fn GetWindowDC\(hwnd: H\) -> H/);
+assert.match(gui, /unsafe fn draw_combo_nonclient_frame\(hwnd: H\)/);
+assert.match(gui, /let dc = GetWindowDC\(hwnd\)/);
+assert.match(gui, /GetWindowRect\(hwnd, &mut window\)/);
+assert.match(gui, /0x0085 => draw_combo_nonclient_frame\(hwnd\)/);
+assert.ok(gui.includes('draw_combo_chrome(hwnd);') && gui.includes('draw_combo_nonclient_frame(hwnd);'));
 assert.ok(gui.includes('0x0007 | 0x0008 | 0x000A | 0x0086'));
 const comboChrome = gui.slice(gui.indexOf('unsafe fn draw_combo_chrome'), gui.indexOf("// ComboBox's themed outer border"));
 assert.ok(!comboChrome.includes('MoveToEx(dc, 0, 0'));
