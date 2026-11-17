@@ -73,22 +73,29 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             existing_sha=$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')
             is_draft=$(gh release view "$tag" --json isDraft --jq '.isDraft')
-            if [[ "$existing_sha" != "$GITHUB_SHA" || "$is_draft" != "true" ]]; then
-              echo "::error::Existing version $tag is not an editable draft from this commit. Bump the version."
+            if [[ "$is_draft" != "true" ]]; then
+              echo "::error::Version $tag has already been published. Bump the release version."
               exit 1
             fi
-            gh release upload "$tag" "$asset" dist/SHA256SUMS.txt --clobber
-          else
-            gh release create "$tag" "$asset" dist/SHA256SUMS.txt \
-              --title "Notion → Obsidian $tag (Windows x64)" \
-              --target "$GITHUB_SHA" \
-              --notes "Portable Windows x64 app. Release is published after automated Windows smoke testing." \
-              --draft
+            if [[ "$existing_sha" == "$GITHUB_SHA" ]]; then
+              gh release upload "$tag" "$asset" dist/SHA256SUMS.txt --clobber
+              exit 0
+            fi
+            # Only discard an unpublished draft from an earlier failed run.
+            gh release delete "$tag" --yes
           fi
+          gh release create "$tag" "$asset" dist/SHA256SUMS.txt \
+            --title "Notion → Obsidian $tag (Windows x64)" \
+            --target "$GITHUB_SHA" \
+            --notes "Portable Windows x64 app. Release is published after automated Windows smoke testing." \
+            --draft
 
   smoke:
     name: Run Windows x64 conversion smoke test
     needs: build
+    permissions:
+      # GitHub draft releases require push-level access even for read operations.
+      contents: write
     runs-on: windows-2022
     timeout-minutes: 15
     steps:
@@ -102,7 +109,9 @@ jobs:
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
           New-Item -ItemType Directory -Path staged -Force | Out-Null
           gh release download "v$version" --pattern "NotionToObsidian_Windows_x64.zip" --dir staged
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the draft release ZIP" }
           gh release download "v$version" --pattern "SHA256SUMS.txt" --dir staged
+          if ($LASTEXITCODE -ne 0) { throw "Could not download draft release checksums" }
           $expected = ((Get-Content staged/SHA256SUMS.txt) -split '\s+')[0]
           $actual = (Get-FileHash staged/NotionToObsidian_Windows_x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) { throw "Staged release ZIP checksum mismatch" }
