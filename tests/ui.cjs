@@ -88,6 +88,10 @@ const settingsUi = fs.readFileSync('src/settings.rs', 'utf8');
 // same dark palette; settings action buttons are owner-drawn as well.
 assert.match(gui, /0x3 \| 0x10 \| 0x200/);
 assert.match(gui, /draw_combo_item\(item, app\.font, app\.scale\)/);
+assert.match(gui, /item\.control_type == 3 && item\.control_id == 118/);
+assert.match(gui, /measure\.control_type == 3 && measure\.control_id == 118/);
+assert.match(gui, /0x133 \| 0x134 \| 0x138/);
+assert.doesNotMatch(gui, /item\.control_type == 2 && item\.control_id == 118/);
 assert.match(gui, /unsafe extern "system" fn dark_combo_proc/);
 assert.match(gui, /draw_combo_chrome\(hwnd\)/);
 assert.match(gui, /GetDpiForWindow/);
@@ -95,7 +99,16 @@ assert.match(gui, /0x2c => \{ \/\/ WM_MEASUREITEM/);
 assert.match(settingsUi, /0x00010000 \| 0xB/);
 assert.match(settingsUi, /draw_settings_button/);
 assert.match(settingsUi, /draw_combo_item\(item, state\.font, state\.scale\)/);
-assert.match(settingsUi, /0x0133 \| 0x0135 \| 0x0138/);
+assert.match(settingsUi, /item\.control_type == 3 && matches!\(item\.control_id, 600\.\.=609\)/);
+assert.match(settingsUi, /measure\.control_type == 3 && matches!\(measure\.control_id, 600\.\.=609\)/);
+assert.match(settingsUi, /0x00010000 \| 0xB, id, x, y, 335, 27/);
+assert.match(settingsUi, /item\.control_type == 4 && matches!\(item\.control_id, 610\.\.=613\)/);
+assert.match(settingsUi, /draw_settings_checkbox/);
+assert.match(settingsUi, /checks: \[bool; 4\]/);
+assert.match(settingsUi, /state\.checks\[index\] = !state\.checks\[index\]/);
+assert.doesNotMatch(settingsUi, /item\.control_type == 2 && matches!\(item\.control_id, 600\.\.=609\)/);
+assert.match(settingsUi, /0x0133 \| 0x0134 \| 0x0138/);
+assert.doesNotMatch(settingsUi, /0x0135/);
 assert.match(settingsUi, /SetTextColor\(dc, TEXT\)/);
 assert.match(settingsUi, /0x002C => \{ \/\/ WM_MEASUREITEM/);
 
