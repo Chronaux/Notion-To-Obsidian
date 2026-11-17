@@ -33,6 +33,7 @@ impl Editor {
             SetWindowTheme(handle, wide("DarkMode_Explorer").as_ptr(), null());
             let previous = SetWindowLongPtrW(handle, -4, dark_combo_proc as isize);
             SetWindowLongPtrW(handle, -21, previous);
+            theme_combo_children(handle);
         } else if class == "EDIT" {
             SetWindowTheme(handle, wide("DarkMode_Explorer").as_ptr(), null());
         }
@@ -252,7 +253,10 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
             0
         }
         0x0133 | 0x0135 | 0x0138 | 0x0134 => {
-            let edit = w != 0 && state.controls.iter().any(|&h| h == l as H && (h == state.child(602) || h == state.child(605)));
+            let combo_part = l != 0 && state.controls.iter()
+                .any(|&combo| GetParent(l as H) == combo);
+            let edit = combo_part || (w != 0 && state.controls.iter()
+                .any(|&h| h == l as H && (h == state.child(602) || h == state.child(605))));
             let dc = w as H;
             let list = msg == 0x0134;
             SetBkMode(dc, 1);
