@@ -108,9 +108,16 @@ assert.match(gui, /SetWindowPos\(hwnd, 0, 0, 0, 0, 0, 0x37\)/);
 assert.match(gui, /EnumChildWindows\(hwnd, Some\(theme_combo_child\), 0\)/);
 assert.match(gui, /unsafe fn is_combo_descendant\(hwnd: H, combo: H\) -> bool/);
 assert.match(gui, /is_combo_descendant\(l as H, combo\)/);
-assert.match(gui, /theme_combo_children\(self\.controls\[18\]\)/);
-assert.match(settingsUi, /theme_combo_children\(h\)/);
-assert.match(settingsUi, /SetWindowLongPtrW\(handle, -4, dark_combo_proc as isize\)/);
+// Both windows use one shared setup: disable UxTheme on the ComboBox itself,
+// strip child edges, then subclass and paint the whole surface with GDI.
+assert.match(gui, /unsafe fn apply_dark_combo\(hwnd: H\)/);
+assert.match(gui, /SetWindowTheme\(hwnd, no_theme\.as_ptr\(\), no_theme\.as_ptr\(\)\)/);
+assert.match(gui, /theme_combo_children\(hwnd\)/);
+assert.match(gui, /SetWindowLongPtrW\(hwnd, -4, dark_combo_proc as isize\)/);
+assert.match(gui, /apply_dark_combo\(self\.controls\[18\]\)/);
+assert.match(settingsUi, /apply_dark_combo\(h\)/);
+assert.doesNotMatch(gui, /SetWindowTheme\(self\.controls\[18\], wide\("DarkMode_Explorer"/);
+assert.doesNotMatch(settingsUi, /SetWindowTheme\(handle, wide\("DarkMode_Explorer"/);
 assert.match(settingsUi, /is_combo_descendant\(l as H, combo\)/);
 assert.match(gui, /draw_combo_chrome\(hwnd\)/);
 // ComboBox paints a separate inset frame around its selected-value area.
