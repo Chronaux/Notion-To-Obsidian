@@ -362,7 +362,7 @@ fn full_properties_native_tags_and_headers() {
     for generated in ["title", "folder", "cssclasses"] {
         assert!(meta.get(generated).is_none(), "{generated}");
     }
-    assert_eq!(meta["tags"], serde_json::json!(["Раздел_А", "Пример"]));
+    assert_eq!(meta["tags"], serde_json::json!(["Пример", "Раздел_А"]));
     assert!(meta
         .as_object()
         .unwrap()
