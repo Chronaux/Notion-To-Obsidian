@@ -251,6 +251,7 @@ extern "system" {
     fn MoveWindow(hwnd: H, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
     fn GetClientRect(hwnd: H, rect: *mut Rect) -> i32;
     fn GetDC(hwnd: H) -> H;
+    fn GetWindowRect(hwnd: H, rect: *mut Rect) -> i32;
     fn ReleaseDC(hwnd: H, dc: H) -> i32;
     fn GetDpiForWindow(hwnd: H) -> u32;
     fn GetFocus() -> H;
@@ -512,7 +513,7 @@ unsafe fn draw_combo_chrome(hwnd: H) {
     let arrow_width = p(26).min(rect.right.saturating_sub(thickness));
     let arrow_left = rect.right - arrow_width;
     let arrow = Rect {
-        left: arrow_left + thickness,
+        left: arrow_left,
         top: thickness,
         right: rect.right - thickness,
         bottom: rect.bottom - thickness,
