@@ -56,6 +56,19 @@ struct DrawItem {
     rect: Rect,
     item_data: usize,
 }
+// TOOLINFOW / comctl32 tooltip ABI on Windows x64.
+#[repr(C)]
+struct ToolInfo {
+    size: u32,
+    flags: u32,
+    owner: H,
+    id: usize,
+    rect: Rect,
+    instance: H,
+    text: *mut u16,
+    param: isize,
+    reserved: *mut c_void,
+}
 const fn rgb(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
 }
@@ -73,6 +86,9 @@ const FIELD_TOPS: [i32; 2] = [103, 183];
 const FIELD_HEIGHT: i32 = 44;
 const EDIT_HEIGHT: i32 = 24;
 const BROWSE_HEIGHT: i32 = 34;
+const IDLE_WINDOW_HEIGHT: i32 = 440;
+const STATUS_WINDOW_HEIGHT: i32 = 540;
+const ZIP_HELP: &str = "В Notion выберите экспорт Markdown & CSV.\nВключите Include subpages и Create folders for subpages.\nСкачайте ZIP-архив, затем укажите его в этом поле.\nИсходный архив не изменяется. Результат создаётся в новой папке.";
 #[repr(C)]
 struct Msg {
     hwnd: H,
@@ -221,6 +237,9 @@ extern "system" {
     fn EnableWindow(hwnd: H, enable: i32) -> i32;
     fn MoveWindow(hwnd: H, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
     fn GetClientRect(hwnd: H, rect: *mut Rect) -> i32;
+    fn GetWindowRect(hwnd: H, rect: *mut Rect) -> i32;
+    fn SetWindowPos(hwnd: H, after: H, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
+    fn DestroyWindow(hwnd: H) -> i32;
     fn InvalidateRect(hwnd: H, rect: *const Rect, erase: i32) -> i32;
     fn FillRect(dc: H, rect: *const Rect, brush: H) -> i32;
     fn BeginPaint(hwnd: H, paint: *mut Paint) -> H;
@@ -235,6 +254,10 @@ extern "system" {
     fn GetDpiForSystem() -> u32;
     fn IsDialogMessageW(hwnd: H, msg: *mut Msg) -> i32;
     fn GetSystemMetrics(index: i32) -> i32;
+}
+#[link(name = "comctl32")]
+extern "system" {
+    fn InitCommonControls();
 }
 #[link(name = "kernel32")]
 extern "system" {
@@ -364,7 +387,9 @@ unsafe fn background(hwnd: H, dc: H, app: &App) {
             bottom: v(y + FIELD_HEIGHT),
         }, FIELD, FIELD, v(14));
     }
-    rule(dc, m, v(386), client.right - m);
+    if app.status_visible {
+        rule(dc, m, v(386), client.right - m);
+    }
     if app.progress_visible {
         let track = Rect {
             left: m, top: client.bottom - v(20),
@@ -386,6 +411,7 @@ unsafe fn draw_button(item: &DrawItem, app: &App) {
     let id = item.control_id;
     let browse = id == 102 || id == 104;
     let hovered = app.hover_button == Some(id);
+    let help = id == 112;
     FillRect(item.dc, &item.rect,
         if browse { app.field_brush } else { app.bg_brush });
     let disabled = item.item_state & 0x4 != 0;
@@ -394,6 +420,26 @@ unsafe fn draw_button(item: &DrawItem, app: &App) {
     let check = id == 110 || id == 111;
     let primary = id == 106 && !app.busy;
     let foreground = if disabled { rgb(114, 111, 121) } else { TEXT };
+
+    if help {
+        let p = |n: i32| (n as f32 * app.scale).round() as i32;
+        let mut circle = item.rect;
+        circle.left += p(1);
+        circle.top += p(1);
+        circle.right -= p(1);
+        circle.bottom -= p(1);
+        rounded(item.dc, &circle,
+            if hovered || focused { rgb(52, 46, 71) } else { BG },
+            if hovered || focused { ACCENT } else { MUTED }, p(20));
+        SetBkMode(item.dc, 1);
+        SetTextColor(item.dc, if hovered || focused { TEXT } else { MUTED });
+        let old = SelectObject(item.dc, app.font);
+        let question = wide("?");
+        let mut r = item.rect;
+        DrawTextW(item.dc, question.as_ptr(), 1, &mut r, 0x20 | 0x4 | 0x1);
+        SelectObject(item.dc, old);
+        return;
+    }
 
     if browse {
         let x = item.rect.left + (18.0 * app.scale).round() as i32;
@@ -521,8 +567,11 @@ struct App {
     titlefont: H,
     bg_brush: H,
     field_brush: H,
-    button_procs: [isize; 4],
+    button_procs: [isize; 5],
     hover_button: Option<u32>,
+    tooltip: H,
+    help_text: Vec<u16>,
+    status_visible: bool,
     skip_missing: bool,
     write_report: bool,
     open_ready: bool,
@@ -548,8 +597,7 @@ impl App {
             -(18.0 * self.scale) as i32, 0, 0, 0, 600,
             0, 0, 0, 1, 0, 0, 5, 0, wide("Segoe UI").as_ptr()
         );
-        // Preserve control indices to keep the Win32 event routing stable.
-        // 11 is deliberately unused: cancellation lives in the primary button.
+        // Keep original control indices; append help control after checkboxes.
         let defs = [
             ("STATIC", "Notion → Obsidian", 0u32, 0),
             ("STATIC", "", 0, 0), // reserved index; no subtitle
@@ -567,6 +615,7 @@ impl App {
             ("STATIC", "Результат будет создан в новой папке; исходники не изменятся", 0x4000, 0),
             ("BUTTON", "Открыть папку", 0x10000, 109),
             ("BUTTON", "Пропускать отсутствующие страницы", 0x10000, 110),
+            ("BUTTON", "Справка по ZIP", 0x10000, 112),
         ];
         for (class, text, style, id) in defs {
             let style = if class == "BUTTON" { (style & !0x0f) | 0xB } else { style };
@@ -591,6 +640,8 @@ impl App {
         ShowWindow(self.controls[1], 0);
         ShowWindow(self.controls[8], 0);
         ShowWindow(self.controls[9], 0);
+        ShowWindow(self.controls[12], 0);
+        ShowWindow(self.controls[13], 0);
         ShowWindow(self.controls[14], 0);
         for i in [3usize, 6] {
             // EM_SETMARGINS is horizontal only. Vertical alignment comes from
@@ -600,8 +651,29 @@ impl App {
                 ((margin << 16) | margin) as isize);
             SetWindowTheme(self.controls[i], wide("DarkMode_Explorer").as_ptr(), null());
         }
-        // Hover feedback and a pointing-hand cursor for every action button.
-        for (slot, index) in [4usize, 7, 10, 14].iter().enumerate() {
+        // Native Windows tooltip: TTF_SUBCLASS handles mouse hover on the help button.
+        self.tooltip = CreateWindowExW(
+            0x00000008, wide("tooltips_class32").as_ptr(), null(),
+            0x80000000 | 0x1 | 0x2, 0, 0, 0, 0,
+            self.hwnd, 0, GetModuleHandleW(null()), null_mut(),
+        );
+        if self.tooltip != 0 {
+            let mut info = ToolInfo {
+                size: std::mem::size_of::<ToolInfo>() as u32,
+                flags: 0x1 | 0x10, // TTF_IDISHWND | TTF_SUBCLASS
+                owner: self.hwnd,
+                id: self.controls[16] as usize,
+                rect: Rect { left: 0, top: 0, right: 0, bottom: 0 },
+                instance: 0,
+                text: self.help_text.as_mut_ptr(),
+                param: 0,
+                reserved: null_mut(),
+            };
+            SendMessageW(self.tooltip, 0x0432, 0, &mut info as *mut ToolInfo as isize); // TTM_ADDTOOLW
+            SendMessageW(self.tooltip, 0x0418, 0, (360.0 * self.scale) as isize); // TTM_SETMAXTIPWIDTH
+        }
+        // Hover feedback and a pointing-hand cursor for action and help buttons.
+        for (slot, index) in [4usize, 7, 10, 14, 16].iter().enumerate() {
             self.button_procs[slot] =
                 SetWindowLongPtrW(self.controls[*index], -4, button_proc as isize);
         }
@@ -648,12 +720,36 @@ impl App {
             (m + v(23), v(427), status_w - v(23), v(22)), // Details
             (w - m - v(173), v(402), v(173), v(38)), // Open folder
             (m, v(239), roww, v(32)),             // Skip missing checkbox
+            (m + v(155), v(74), v(22), v(22)),   // ZIP help tooltip trigger
         ];
         for (i, (x, y, width, height)) in rows.iter().enumerate() {
             if *width > 0 {
                 MoveWindow(self.controls[i], *x, *y, *width, *height, 1);
             }
         }
+        InvalidateRect(self.hwnd, null(), 0);
+    }
+
+    // Keep the initial window compact; reveal a dedicated status section
+    // only during processing and after completion (or an error).
+    unsafe fn set_status_visible(&mut self, visible: bool) {
+        if self.status_visible == visible { return; }
+        self.status_visible = visible;
+        ShowWindow(self.controls[12], visible as i32);
+        ShowWindow(self.controls[13], visible as i32);
+        if !visible {
+            self.progress_visible = false;
+            self.progress_target = 0.0;
+            self.progress_display = 0.0;
+            self.open_ready = false;
+            ShowWindow(self.controls[14], 0);
+        }
+        let mut bounds = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+        GetWindowRect(self.hwnd, &mut bounds);
+        let height = if visible { STATUS_WINDOW_HEIGHT } else { IDLE_WINDOW_HEIGHT };
+        SetWindowPos(self.hwnd, 0, 0, 0, bounds.right - bounds.left,
+            (height as f32 * self.scale).round() as i32,
+            0x0002 | 0x0004 | 0x0010); // SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE
         InvalidateRect(self.hwnd, null(), 0);
     }
 
@@ -701,6 +797,7 @@ impl App {
             return;
         }
         self.open_ready = false;
+        self.set_status_visible(true);
         self.progress_visible = true;
         self.progress_target = 0.0;
         self.progress_display = 0.0;
@@ -854,8 +951,7 @@ impl App {
         if GetOpenFileNameW(&mut of) != 0 {
             let end = file.iter().position(|&x| x == 0).unwrap();
             set(self.controls[3], &String::from_utf16_lossy(&file[..end]));
-            set(self.controls[12], "Архив выбран");
-            set(self.controls[13], "Выберите хранилище и нажмите «Конвертировать»");
+            // EN_CHANGE resets any previous conversion result and collapses status.
         }
         SetFocus(self.hwnd);
     }
@@ -896,7 +992,7 @@ impl App {
                         ));
                         let target = fresh_path(folder.join("Notion_Obsidian"));
                         set(self.controls[6], &target.to_string_lossy());
-                        set(self.controls[13], "Будет создана новая папка; существующие файлы не затрагиваются");
+                        // EN_CHANGE clears any stale completion status.
                         CoTaskMemFree(path as *mut c_void);
                     }
                     (item_methods.release)(item);
@@ -931,6 +1027,7 @@ unsafe extern "system" fn button_proc(hwnd: H, msg: u32, w: usize, l: isize) -> 
         else if hwnd == app.controls[7] { (1, 104) }
         else if hwnd == app.controls[10] { (2, 106) }
         else if hwnd == app.controls[14] { (3, 109) }
+        else if hwnd == app.controls[16] { (4, 112) }
         else { return DefWindowProcW(hwnd, msg, w, l); };
     match msg {
         0x0200 if IsWindowEnabled(hwnd) != 0 => { // WM_MOUSEMOVE
@@ -1020,7 +1117,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         0x24 => { // WM_GETMINMAXINFO
             let points = l as *mut Point;
             (*points.add(3)).x = (760.0 * app.scale).round() as i32;
-            (*points.add(3)).y = (535.0 * app.scale).round() as i32;
+            (*points.add(3)).y = (if app.status_visible { 535.0 } else { 435.0 } * app.scale).round() as i32;
             0
         }
         5 => { // WM_SIZE
@@ -1028,9 +1125,15 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
             0
         }
         0x111 => { // WM_COMMAND
+            // EN_CHANGE on a path field invalidates any previous conversion summary.
+            if (w & 0xffff == 101 || w & 0xffff == 103)
+                && (w >> 16) & 0xffff == 0x0300 && !app.busy {
+                app.set_status_visible(false);
+            }
             match w & 0xffff {
                 102 => if !app.busy { app.choose_zip() },
                 104 => if !app.busy { app.choose_output() },
+                112 => dialog(hwnd, ZIP_HELP),
                 106 => {
                     if app.busy {
                         if !app.cancel_requested {
@@ -1091,6 +1194,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         }
         2 => {
             KillTimer(hwnd, 1);
+            if app.tooltip != 0 { DestroyWindow(app.tooltip); }
             DeleteObject(app.font);
             DeleteObject(app.titlefont);
             for brush in [app.bg_brush, app.field_brush] { DeleteObject(brush); }
@@ -1103,6 +1207,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
 pub fn launch(archive: Option<PathBuf>) {
     unsafe {
         SetProcessDPIAware();
+        InitCommonControls();
         let scale = GetDpiForSystem() as f32 / 96.0;
         CoInitializeEx(null_mut(), 2);
         let instance = GetModuleHandleW(null());
@@ -1129,8 +1234,11 @@ pub fn launch(archive: Option<PathBuf>) {
             titlefont: 0,
             bg_brush: 0,
             field_brush: 0,
-            button_procs: [0; 4],
+            button_procs: [0; 5],
             hover_button: None,
+            tooltip: 0,
+            help_text: wide(ZIP_HELP),
+            status_visible: false,
             skip_missing: true,
             write_report: false,
             open_ready: false,
@@ -1146,7 +1254,7 @@ pub fn launch(archive: Option<PathBuf>) {
         });
         let ptr = Box::into_raw(app);
         let width = (790.0 * scale) as i32;
-        let height = (540.0 * scale) as i32;
+        let height = (IDLE_WINDOW_HEIGHT as f32 * scale) as i32;
         let x = ((GetSystemMetrics(0) - width) / 2).max(0);
         let y = ((GetSystemMetrics(1) - height) / 2).max(0);
         let hwnd = CreateWindowExW(
@@ -1197,3 +1305,4 @@ const _: [(); 48] = [(); std::mem::size_of::<Msg>()];
 const _: [(); 152] = [(); std::mem::size_of::<OpenFile>()];
 const _: [(); 16] = [(); std::mem::size_of::<Guid>()];
 const _: [(); 64] = [(); std::mem::size_of::<DrawItem>()];
+const _: [(); 72] = [(); std::mem::size_of::<ToolInfo>()];
