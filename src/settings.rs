@@ -108,7 +108,7 @@ impl Editor {
     unsafe fn set_selected(&self, id: usize, selected: usize) {
         SendMessageW(self.child(id), 0x014E, selected, 0); // CB_SETCURSEL
     }
-    unsafe fn refresh(&self) {
+    unsafe fn refresh(&mut self) {
         let o = &self.options;
         self.set_selected(600, if o.structure.sections == Sections::Source {0} else {1});
         self.set_selected(601, if o.structure.unmatched == Unmatched::Source {0} else {1});
