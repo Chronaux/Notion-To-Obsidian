@@ -251,11 +251,10 @@ extern "system" {
     fn MoveWindow(hwnd: H, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
     fn GetClientRect(hwnd: H, rect: *mut Rect) -> i32;
     fn GetDC(hwnd: H) -> H;
-    fn GetWindowDC(hwnd: H) -> H;
+    fn GetWindowRect(hwnd: H, rect: *mut Rect) -> i32;
     fn ReleaseDC(hwnd: H, dc: H) -> i32;
     fn GetDpiForWindow(hwnd: H) -> u32;
     fn GetFocus() -> H;
-    fn GetWindowRect(hwnd: H, rect: *mut Rect) -> i32;
     fn SetWindowPos(hwnd: H, after: H, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
     fn DestroyWindow(hwnd: H) -> i32;
     fn InvalidateRect(hwnd: H, rect: *const Rect, erase: i32) -> i32;
@@ -417,11 +416,9 @@ unsafe fn draw_combo_item(item: &DrawItem, font: H, scale: f32) {
     }
 }
 
-// CBS_DROPDOWNLIST creates an internal EDIT/STATIC child for the selected
-// value. The parent ComboBox theme does not theme that child, so its default
-// WS_BORDER/WS_EX_CLIENTEDGE produces the remaining white outline. Theme the
-// child itself and remove its redundant frame; the ComboBox owns the one dark
-// outer frame painted by dark_combo_proc.
+// CBS_DROPDOWNLIST may create an internal EDIT/STATIC child for the selected
+// value. Disable its visual-style frame and strip all common edge styles:
+ // the parent ComboBox paints the complete dark client frame after WM_PAINT.
 unsafe extern "system" fn theme_combo_child(hwnd: H, _param: isize) -> i32 {
     let mut class_name = [0u16; 32];
     let length = GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32);
@@ -430,11 +427,13 @@ unsafe extern "system" fn theme_combo_child(hwnd: H, _param: isize) -> i32 {
     }
     let class_name = String::from_utf16_lossy(&class_name[..length as usize]);
     if class_name.eq_ignore_ascii_case("EDIT") || class_name.eq_ignore_ascii_case("STATIC") {
-        SetWindowTheme(hwnd, wide("DarkMode_Explorer").as_ptr(), null());
+        // Empty theme names disable uxtheme for this child; a dark theme class
+        // can still paint its own inset edge even after WS_BORDER is removed.
+        SetWindowTheme(hwnd, wide("").as_ptr(), wide("").as_ptr());
         let style = GetWindowLongPtrW(hwnd, -16); // GWL_STYLE
         let ex_style = GetWindowLongPtrW(hwnd, -20); // GWL_EXSTYLE
         let dark_style = style & !0x00800000; // WS_BORDER
-        let dark_ex_style = ex_style & !0x00000200; // WS_EX_CLIENTEDGE
+        let dark_ex_style = ex_style & !(0x00000200 | 0x00020000); // WS_EX_CLIENTEDGE | WS_EX_STATICEDGE
         let mut frame_changed = false;
         if dark_style != style {
             SetWindowLongPtrW(hwnd, -16, dark_style);
@@ -473,19 +472,51 @@ unsafe fn is_combo_descendant(hwnd: H, combo: H) -> bool {
 // The system theme can still paint a light arrow/frame even for an owner-drawn
 // combo. Paint that small chrome area after the native control has painted its
 // text; the popup rows themselves are handled by draw_combo_item.
+// ComboBox's selected-value area is owner-drawn, but the themed control still
+// paints a bright inset frame around that area. Repaint the complete client
+// chrome after the native WM_PAINT: outer edges, value-field boundary, arrow,
+// separator and chevron all use the application's palette.
+unsafe fn draw_combo_frame(dc: H, rect: &Rect, divider: i32, color: u32, thickness: i32) {
+    if rect.right <= 0 || rect.bottom <= 0 || thickness <= 0 {
+        return;
+    }
+    let brush = CreateSolidBrush(color);
+    let t = thickness.min(rect.right).min(rect.bottom);
+    let split = divider.clamp(t, rect.right - t);
+    let edges = [
+        Rect { left: 0, top: 0, right: rect.right, bottom: t },
+        Rect { left: 0, top: rect.bottom - t, right: rect.right, bottom: rect.bottom },
+        Rect { left: 0, top: 0, right: t, bottom: rect.bottom },
+        Rect { left: rect.right - t, top: 0, right: rect.right, bottom: rect.bottom },
+        // The display/value part has its own right edge before the dropdown
+        // button. This is the light inset line visible in the Win32 theme.
+        Rect { left: split - t, top: t, right: split, bottom: rect.bottom - t },
+    ];
+    for edge in &edges {
+        FillRect(dc, edge, brush);
+    }
+    DeleteObject(brush);
+}
+
 unsafe fn draw_combo_chrome(hwnd: H) {
     let dc = GetDC(hwnd);
     if dc == 0 { return; }
     let mut rect = Rect { left: 0, top: 0, right: 0, bottom: 0 };
     GetClientRect(hwnd, &mut rect);
+    if rect.right <= 0 || rect.bottom <= 0 {
+        ReleaseDC(hwnd, dc);
+        return;
+    }
     let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
     let p = |n: i32| (n as f32 * scale).round() as i32;
-    let arrow_width = p(26).min(rect.right.max(0));
+    let thickness = p(1).max(1).min(rect.right).min(rect.bottom);
+    let arrow_width = p(26).min(rect.right.saturating_sub(thickness));
+    let arrow_left = rect.right - arrow_width;
     let arrow = Rect {
-        left: (rect.right - arrow_width).max(0),
-        top: 1,
-        right: rect.right.saturating_sub(1),
-        bottom: rect.bottom.saturating_sub(1),
+        left: arrow_left,
+        top: thickness,
+        right: rect.right - thickness,
+        bottom: rect.bottom - thickness,
     };
     let brush = CreateSolidBrush(FIELD);
     FillRect(dc, &arrow, brush);
@@ -494,13 +525,12 @@ unsafe fn draw_combo_chrome(hwnd: H) {
     let enabled = IsWindowEnabled(hwnd) != 0;
     let focused = GetFocus() == hwnd;
     let border = if enabled && focused { ACCENT } else { BORDER };
-    let pen = CreatePen(0, p(1).max(1), border);
+    draw_combo_frame(dc, &rect, arrow_left, border, thickness);
+
+    // The dropdown button is custom-painted as part of the same surface.
+    let pen = CreatePen(0, thickness, border);
     let old_pen = SelectObject(dc, pen);
-    // The outer frame is non-client and is painted separately in WM_NCPAINT.
-    // Only draw the separator and chevron in the client area here.
-    MoveToEx(dc, arrow.left, p(5), null_mut());
-    LineTo(dc, arrow.left, rect.bottom - p(5));
-    let cx = arrow.left + arrow_width / 2;
+    let cx = arrow_left + arrow_width / 2;
     let cy = rect.bottom / 2;
     let half = p(4);
     MoveToEx(dc, cx - half, cy - p(2), null_mut());
@@ -508,43 +538,6 @@ unsafe fn draw_combo_chrome(hwnd: H) {
     LineTo(dc, cx + half, cy - p(2));
     SelectObject(dc, old_pen);
     DeleteObject(pen);
-    ReleaseDC(hwnd, dc);
-}
-
-// ComboBox's themed outer border belongs to the non-client area. GetDC only
-// covers the client area, so painting the frame there leaves the system's white
-// border visible. Overlay the native frame using a window DC after WM_NCPAINT.
-unsafe fn draw_combo_nonclient_frame(hwnd: H) {
-    let dc = GetWindowDC(hwnd);
-    if dc == 0 { return; }
-    let mut window = Rect { left: 0, top: 0, right: 0, bottom: 0 };
-    if GetWindowRect(hwnd, &mut window) == 0 {
-        ReleaseDC(hwnd, dc);
-        return;
-    }
-    let width = (window.right - window.left).max(0);
-    let height = (window.bottom - window.top).max(0);
-    let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
-    let thickness = (scale.round() as i32).max(1).min(width).min(height);
-    if width == 0 || height == 0 {
-        ReleaseDC(hwnd, dc);
-        return;
-    }
-    let border = if IsWindowEnabled(hwnd) != 0 && GetFocus() == hwnd {
-        ACCENT
-    } else {
-        BORDER
-    };
-    let brush = CreateSolidBrush(border);
-    let top = Rect { left: 0, top: 0, right: width, bottom: thickness };
-    let bottom = Rect { left: 0, top: height - thickness, right: width, bottom: height };
-    let left = Rect { left: 0, top: thickness, right: thickness, bottom: height - thickness };
-    let right = Rect { left: width - thickness, top: thickness, right: width, bottom: height - thickness };
-    FillRect(dc, &top, brush);
-    FillRect(dc, &bottom, brush);
-    FillRect(dc, &left, brush);
-    FillRect(dc, &right, brush);
-    DeleteObject(brush);
     ReleaseDC(hwnd, dc);
 }
 
@@ -558,22 +551,14 @@ unsafe extern "system" fn dark_combo_proc(hwnd: H, msg: u32, w: usize, l: isize)
         DefWindowProcW(hwnd, msg, w, l)
     };
     match msg {
-        0x000F => {
-            draw_combo_chrome(hwnd);
-            // Some Windows themes repaint the ComboBox frame during WM_PAINT,
-            // not only WM_NCPAINT. Overlay it in both paths.
-            draw_combo_nonclient_frame(hwnd);
-        }
-        0x0085 => draw_combo_nonclient_frame(hwnd), // WM_NCPAINT
+        0x000F => draw_combo_chrome(hwnd), // WM_PAINT: replace themed chrome after owner-drawn text
         0x0007 | 0x0008 | 0x000A | 0x0086 | 0x0201 | 0x0202 => {
             InvalidateRect(hwnd, null(), 0);
-            draw_combo_nonclient_frame(hwnd);
         }
         _ => {}
     }
     result
 }
-
 
 unsafe fn rule(dc: H, x1: i32, y: i32, x2: i32) {
     let pen = CreatePen(0, 1, BORDER);

@@ -2,7 +2,7 @@
 
 Переносимое приложение на **Rust** для преобразования ZIP-экспорта Notion в готовое хранилище Obsidian: страницы, вложения, внутренние ссылки, Properties, теги и базы данных.
 
-**Windows 10/11 · x64 · v0.6.4 · нативный Win32 · полностью локально**
+**Windows 10/11 · x64 · v0.6.5 · нативный Win32 · полностью локально**
 
 ## Скачать готовую Windows-версию
 
@@ -12,7 +12,7 @@
 
 В **GitHub Releases** публикуется один ZIP с EXE и документацией. Сначала архив помещается в черновик релиза, проверяется на Windows и только после этого становится доступен для скачивания. Промежуточные артефакты GitHub Actions не используются.
 
-Распакуйте ZIP из Releases, запустите `NotionToObsidian_v0.6.4.exe` (имя содержит номер соответствующего выпуска). **Установка Rust, Python, .NET, Electron или WebView2 не требуется.** Приложение полностью локальное, Windows 10/11 x64.
+Распакуйте ZIP из Releases, запустите `NotionToObsidian_v0.6.5.exe` (имя содержит номер соответствующего выпуска). **Установка Rust, Python, .NET, Electron или WebView2 не требуется.** Приложение полностью локальное, Windows 10/11 x64.
 
 ## Профили экспорта (v0.6.0)
 
@@ -27,11 +27,11 @@
 CLI также принимает `--profile universal|knowledge` и `--config profile.json`. Без указания профиля CLI сохраняет прежнее поведение. Пример:
 
 ```powershell
-NotionToObsidian_v0.6.4.exe export.zip D:\Obsidian\MyVault --profile universal
-NotionToObsidian_v0.6.4.exe export.zip D:\Obsidian\MyVault --config profile.json
+NotionToObsidian_v0.6.5.exe export.zip D:\Obsidian\MyVault --profile universal
+NotionToObsidian_v0.6.5.exe export.zip D:\Obsidian\MyVault --config profile.json
 ```
 
-Точная схема JSON, режимы вывода `markdown_only` / `bases_only` и ограничения описаны в [спецификации профилей](docs/EXPORT_PROFILES.md). Для всех режимов ZIP должен быть экспортирован из Notion как **Markdown & CSV**; HTML-экспорт пока не поддерживается. В v0.6.4 редактирование индивидуальных настроек каждой базы через GUI ещё не предусмотрено — используется JSON.
+Точная схема JSON, режимы вывода `markdown_only` / `bases_only` и ограничения описаны в [спецификации профилей](docs/EXPORT_PROFILES.md). Для всех режимов ZIP должен быть экспортирован из Notion как **Markdown & CSV**; HTML-экспорт пока не поддерживается. В v0.6.5 редактирование индивидуальных настроек каждой базы через GUI ещё не предусмотрено — используется JSON.
 
 ## Что переносится
 
@@ -137,7 +137,7 @@ node tests/ui.cjs  # статическая проверка иконки и т�
 
 Проверки запускаются через `cargo test --locked` и тесты интерфейса. Для публикации используются только синтетические данные; результаты проверки частного экспорта не размещаются в репозитории.
 
-Фактический статус сборки v0.6.4 смотрите в [GitHub Actions](https://github.com/Chronaux/Notion-To-Obsidian/actions/workflows/windows-release.yml). Предыдущие результаты v0.4.0 не заменяют проверку v0.6.4; бинарный архив публикуется только после автоматических тестов.
+Фактический статус сборки v0.6.5 смотрите в [GitHub Actions](https://github.com/Chronaux/Notion-To-Obsidian/actions/workflows/windows-release.yml). Предыдущие результаты v0.4.0 не заменяют проверку v0.6.5; бинарный архив публикуется только после автоматических тестов.
 
 Лицензионные уведомления сторонних компонентов: [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) и [licenses/](licenses/).
 
