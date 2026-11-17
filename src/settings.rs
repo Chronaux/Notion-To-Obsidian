@@ -33,7 +33,6 @@ impl Editor {
             SetWindowTheme(handle, wide("DarkMode_Explorer").as_ptr(), null());
             let previous = SetWindowLongPtrW(handle, -4, dark_combo_proc as isize);
             SetWindowLongPtrW(handle, -21, previous);
-            theme_combo_children(handle);
         } else if class == "EDIT" {
             SetWindowTheme(handle, wide("DarkMode_Explorer").as_ptr(), null());
         }
@@ -48,6 +47,7 @@ impl Editor {
         for item in items {
             SendMessageW(h, 0x0143, 0, wide(item).as_ptr() as isize); // CB_ADDSTRING
         }
+        theme_combo_children(h);
     }
     unsafe fn check(&mut self, id: isize, text: &str, x: i32, y: i32) {
         // A themed BS_AUTOCHECKBOX ignores WM_CTLCOLORBTN text colours on Win10/11.
