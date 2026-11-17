@@ -480,17 +480,31 @@ unsafe fn draw_combo_frame(dc: H, rect: &Rect, divider: i32, color: u32, thickne
     if rect.right <= 0 || rect.bottom <= 0 || thickness <= 0 {
         return;
     }
-    let brush = CreateSolidBrush(color);
-    let t = thickness.min(rect.right).min(rect.bottom);
+    let t = thickness.min(rect.right / 2).min(rect.bottom / 2).max(1);
     let split = divider.clamp(t, rect.right - t);
+
+    // The native theme leaves a one-pixel white inset around the selected
+    // value area. Replace those inner bands with the field fill; the dark
+    // outer border remains the only perimeter around the value area.
+    let field_brush = CreateSolidBrush(FIELD);
+    let inset_edges = [
+        Rect { left: t, top: t, right: split, bottom: (2 * t).min(rect.bottom - t) },
+        Rect { left: t, top: rect.bottom - 2 * t, right: split, bottom: rect.bottom - t },
+        Rect { left: t, top: t, right: 2 * t, bottom: rect.bottom - t },
+    ];
+    for edge in &inset_edges {
+        FillRect(dc, edge, field_brush);
+    }
+    DeleteObject(field_brush);
+
+    let brush = CreateSolidBrush(color);
     let edges = [
         Rect { left: 0, top: 0, right: rect.right, bottom: t },
         Rect { left: 0, top: rect.bottom - t, right: rect.right, bottom: rect.bottom },
         Rect { left: 0, top: 0, right: t, bottom: rect.bottom },
         Rect { left: rect.right - t, top: 0, right: rect.right, bottom: rect.bottom },
-        // The display/value part has its own right edge before the dropdown
-        // button. This is the light inset line visible in the Win32 theme.
-        Rect { left: split - t, top: t, right: split, bottom: rect.bottom - t },
+        // Divider between the value area and dropdown button.
+        Rect { left: split, top: t, right: (split + t).min(rect.right), bottom: rect.bottom - t },
     ];
     for edge in &edges {
         FillRect(dc, edge, brush);
