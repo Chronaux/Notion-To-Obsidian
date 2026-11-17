@@ -855,12 +855,35 @@ impl Converter {
         );
         Ok(())
     }
+    fn validate_columns(&self) -> Result<()> {
+        for db in &self.dbs {
+            if let Some(rule) = self.options.database_override(&db.uid) {
+                if let Some(title) = &rule.title_column {
+                    if !db.columns.contains(title) {
+                        return Err(format!("В базе {} нет колонки названия {:?}", db.title, title));
+                    }
+                }
+                if let Some(tags) = &rule.tag_columns {
+                    for tag in tags {
+                        if !db.columns.contains(tag) {
+                            return Err(format!("В базе {} нет колонки тегов {:?}", db.title, tag));
+                        }
+                    }
+                }
+            }
+            if self.options.databases.title_column == options::TitleColumn::Explicit
+                && self.options.database_override(&db.uid).and_then(|o| o.title_column.as_ref()).is_none() {
+                return Err(format!("Для базы {} не задана колонка названия.", db.title));
+            }
+        }
+        Ok(())
+    }
     fn match_rows(&mut self) -> Result<()> {
         (self.progress)("Сопоставление CSV и страниц записей…");
         for di in 0..self.dbs.len() {
             self.check()?;
             let db = self.dbs[di].clone();
-            let title_key = self.options.title_key(&db.uid, &db.columns);
+            let title_key = self.options.title_key(&db.uid, &db.columns).map(str::to_string);
             let mut available = self
                 .pages
                 .iter()
@@ -880,7 +903,7 @@ impl Converter {
                 let mut proposals = vec![];
                 for &ri in &remaining {
                     let row = &db.rows[ri];
-                    let title = title_key
+                    let title = title_key.as_deref()
                         .and_then(|k| row.get(k))
                         .map(String::as_str)
                         .unwrap_or("");
@@ -893,7 +916,7 @@ impl Converter {
                         let mut score = if tm { 100 } else { 0 };
                         let mut agreements = 0;
                         for (k, v) in row {
-                            if Some(k.as_str()) == title_key || v.is_empty() {
+                            if Some(k.as_str()) == title_key.as_deref() || v.is_empty() {
                                 continue;
                             }
                             let exported = props[&pi].get(k).map(String::as_str).unwrap_or("");
@@ -977,7 +1000,7 @@ impl Converter {
                     pi
                 } else {
                     let uid = hash(format!("{}\0{}\0{ri}", db.uid, pretty(row)))[..32].to_string();
-                    let title = title_key
+                    let title = title_key.as_deref()
                         .and_then(|k| row.get(k))
                         .filter(|s| !s.is_empty())
                         .cloned()
@@ -1947,9 +1970,9 @@ impl Converter {
         let mut table_data = json!({"byPage":{},"byRowPath":{}});
         for db in self.dbs.clone() {
             self.check()?;
-            let title_col = self.options.title_key(&db.uid, &db.columns).unwrap_or("Название");
+            let title_col = self.options.title_key(&db.uid, &db.columns).unwrap_or("Название").to_string();
             let property = |c: &String| {
-                if c == title_col {
+                if c.as_str() == title_col.as_str() {
                     "formula.Название".to_string()
                 } else {
                     format!("note.{}", db.keys[c])
@@ -1974,7 +1997,7 @@ impl Converter {
                 .map(|c| {
                     (
                         property(c),
-                        self.options.column_width(&db.uid, c, c == title_col),
+                        self.options.column_width(&db.uid, c, c.as_str() == title_col.as_str()),
                     )
                 })
                 .collect::<BTreeMap<_, _>>();
@@ -2006,7 +2029,7 @@ impl Converter {
                     json!({"or":paths.iter().map(|path|format!("file.path == {} || file.path.endsWith({})",serde_json::to_string(path).unwrap(),serde_json::to_string(&format!("/{path}")).unwrap())).collect::<Vec<_>>()})
                 }
             };
-            let title_key = serde_json::to_string(&db.keys[title_col]).unwrap();
+            let title_key = serde_json::to_string(&db.keys[title_col.as_str()]).unwrap();
             let title_link = format!(
                 "link(file.path, if(note[{title_key}], note[{title_key}], \"Без названия\"))"
             );
@@ -2040,6 +2063,7 @@ impl Converter {
             if !output_mode.markdown() {
                 body = format!("# {}\n\n{}\n", db.title, base_link);
             }
+            let mut raw_rows = vec![];
             if output_mode.markdown() {
             body.push_str(&format!(
                 "| {} |\n| {} |\n",
@@ -2049,7 +2073,6 @@ impl Converter {
                     .join(" | "),
                 cols.iter().map(|_| "---").collect::<Vec<_>>().join(" | ")
             ));
-            let mut raw_rows = vec![];
             for &pi in &db.pages {
                 let page = self.pages[pi].clone();
                 let mut cells = vec![];
@@ -2058,7 +2081,7 @@ impl Converter {
                     let value = page.row.get(col).cloned().unwrap_or_default();
                     let raw = self.rewrite(&value, &page.source);
                     values.push(raw.clone());
-                    if col == title_col {
+                    if col.as_str() == title_col.as_str() {
                         let shown = if value.is_empty() {
                             "Без названия"
                         } else {
@@ -2077,7 +2100,7 @@ impl Converter {
             body.push_str("\n^notion-table\n");
             }
             self.output.insert(db.target.clone(), body.into_bytes());
-            table_data["byPage"][&db.target] = json!({"columns":cols,"rows":raw_rows,"titleIndex":cols.iter().position(|c|c==title_col)});
+            table_data["byPage"][&db.target] = json!({"columns":cols,"rows":raw_rows,"titleIndex":cols.iter().position(|c|c.as_str()==title_col.as_str())});
             for &pi in &db.pages {
                 table_data["byRowPath"][&self.pages[pi].target] = json!({"titleColumn":title_col});
             }
@@ -2269,7 +2292,8 @@ impl Converter {
                             errors.push(format!("Осталась ссылка Notion: {name}"));
                         }
                     }
-                    if rx(r"</?(?:aside|details|summary)\b").is_match(s) {
+                    if self.options.content.callouts != Callouts::PreserveMarkdown
+                        && rx(r"</?(?:aside|details|summary)\b").is_match(s) {
                         errors.push(format!("Осталась разметка Notion: {name}"));
                     }
                 }
@@ -2338,8 +2362,10 @@ impl Converter {
         Ok(())
     }
     pub fn inspect(mut self, archive: &Path) -> Result<Report> {
+        self.options.validate()?;
         let files = self.read_archive(archive)?;
         self.inventory(&files)?;
+        self.validate_columns()?;
         self.match_rows()?;
         self.report.databases = self
             .dbs
@@ -2349,11 +2375,13 @@ impl Converter {
         Ok(self.report)
     }
     pub fn run(mut self, archive: &Path, destination: &Path) -> Result<Report> {
+        self.options.validate()?;
         if destination.exists() {
             return Err("Папка результата уже существует. Выберите новое имя.".into());
         }
         let files = self.read_archive(archive)?;
         self.inventory(&files)?;
+        self.validate_columns()?;
         self.match_rows()?;
         self.paths(&files);
         self.render(&files)?;
