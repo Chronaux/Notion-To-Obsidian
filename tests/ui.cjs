@@ -83,6 +83,22 @@ assert.match(editor, /pub unsafe fn show\(/);
 assert.match(editor, /GetSaveFileNameW/);
 assert.match(core, /pub fn preview\(/);
 assert.match(core, /self\.options\.validate\(\)\?/);
+const settingsUi = fs.readFileSync('src/settings.rs', 'utf8');
+// Both combo boxes are owner-drawn and their frame/arrow are painted in the
+// same dark palette; settings action buttons are owner-drawn as well.
+assert.match(gui, /0x3 \| 0x10 \| 0x200/);
+assert.match(gui, /draw_combo_item\(item, app\.font, app\.scale\)/);
+assert.match(gui, /unsafe extern "system" fn dark_combo_proc/);
+assert.match(gui, /draw_combo_chrome\(hwnd\)/);
+assert.match(gui, /GetDpiForWindow/);
+assert.match(gui, /0x2c => \{ \/\/ WM_MEASUREITEM/);
+assert.match(settingsUi, /0x00010000 \| 0xB/);
+assert.match(settingsUi, /draw_settings_button/);
+assert.match(settingsUi, /draw_combo_item\(item, state\.font, state\.scale\)/);
+assert.match(settingsUi, /0x0133 \| 0x0135 \| 0x0138/);
+assert.match(settingsUi, /SetTextColor\(dc, TEXT\)/);
+assert.match(settingsUi, /0x002C => \{ \/\/ WM_MEASUREITEM/);
+
 // Regressions reported in 0.5.5: redraw only the progress strip,
 // keep folder icons visible on focus, and provide native hover feedback.
 assert.match(gui, /WS_CLIPCHILDREN/);
