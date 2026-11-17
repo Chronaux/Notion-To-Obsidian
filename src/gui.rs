@@ -249,6 +249,7 @@ extern "system" {
     fn MoveWindow(hwnd: H, x: i32, y: i32, w: i32, h: i32, repaint: i32) -> i32;
     fn GetClientRect(hwnd: H, rect: *mut Rect) -> i32;
     fn GetDC(hwnd: H) -> H;
+    fn GetWindowDC(hwnd: H) -> H;
     fn ReleaseDC(hwnd: H, dc: H) -> i32;
     fn GetDpiForWindow(hwnd: H) -> u32;
     fn GetFocus() -> H;
@@ -437,14 +438,11 @@ unsafe fn draw_combo_chrome(hwnd: H) {
 
     let enabled = IsWindowEnabled(hwnd) != 0;
     let focused = GetFocus() == hwnd;
-    let border = if !enabled { BORDER } else if focused { ACCENT } else { BORDER };
+    let border = if enabled && focused { ACCENT } else { BORDER };
     let pen = CreatePen(0, p(1).max(1), border);
     let old_pen = SelectObject(dc, pen);
-    // Outline, arrow separator and chevron.
-    MoveToEx(dc, 0, 0, null_mut()); LineTo(dc, rect.right - 1, 0);
-    LineTo(dc, rect.right - 1, rect.bottom - 1);
-    LineTo(dc, 0, rect.bottom - 1);
-    LineTo(dc, 0, 0);
+    // The outer frame is non-client and is painted separately in WM_NCPAINT.
+    // Only draw the separator and chevron in the client area here.
     MoveToEx(dc, arrow.left, p(5), null_mut());
     LineTo(dc, arrow.left, rect.bottom - p(5));
     let cx = arrow.left + arrow_width / 2;
@@ -455,6 +453,43 @@ unsafe fn draw_combo_chrome(hwnd: H) {
     LineTo(dc, cx + half, cy - p(2));
     SelectObject(dc, old_pen);
     DeleteObject(pen);
+    ReleaseDC(hwnd, dc);
+}
+
+// ComboBox's themed outer border belongs to the non-client area. GetDC only
+// covers the client area, so painting the frame there leaves the system's white
+// border visible. Overlay the native frame using a window DC after WM_NCPAINT.
+unsafe fn draw_combo_nonclient_frame(hwnd: H) {
+    let dc = GetWindowDC(hwnd);
+    if dc == 0 { return; }
+    let mut window = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+    if GetWindowRect(hwnd, &mut window) == 0 {
+        ReleaseDC(hwnd, dc);
+        return;
+    }
+    let width = (window.right - window.left).max(0);
+    let height = (window.bottom - window.top).max(0);
+    let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
+    let thickness = (scale.round() as i32).max(1).min(width).min(height);
+    if width == 0 || height == 0 {
+        ReleaseDC(hwnd, dc);
+        return;
+    }
+    let border = if IsWindowEnabled(hwnd) != 0 && GetFocus() == hwnd {
+        ACCENT
+    } else {
+        BORDER
+    };
+    let brush = CreateSolidBrush(border);
+    let top = Rect { left: 0, top: 0, right: width, bottom: thickness };
+    let bottom = Rect { left: 0, top: height - thickness, right: width, bottom: height };
+    let left = Rect { left: 0, top: thickness, right: thickness, bottom: height - thickness };
+    let right = Rect { left: width - thickness, top: thickness, right: width, bottom: height - thickness };
+    FillRect(dc, &top, brush);
+    FillRect(dc, &bottom, brush);
+    FillRect(dc, &left, brush);
+    FillRect(dc, &right, brush);
+    DeleteObject(brush);
     ReleaseDC(hwnd, dc);
 }
 
@@ -469,8 +504,10 @@ unsafe extern "system" fn dark_combo_proc(hwnd: H, msg: u32, w: usize, l: isize)
     };
     match msg {
         0x000F => draw_combo_chrome(hwnd), // WM_PAINT
-        0x0007 | 0x0008 | 0x000A | 0x0201 | 0x0202 => {
+        0x0085 => draw_combo_nonclient_frame(hwnd), // WM_NCPAINT
+        0x0007 | 0x0008 | 0x000A | 0x0086 | 0x0201 | 0x0202 => {
             InvalidateRect(hwnd, null(), 0);
+            draw_combo_nonclient_frame(hwnd);
         }
         _ => {}
     }
