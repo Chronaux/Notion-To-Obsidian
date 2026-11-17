@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
-use notion_to_obsidian::{Converter, Report};
+use notion_to_obsidian::{Converter, Report, options::ConversionOptions};
+#[path = "settings.rs"]
+mod settings;
 use std::{
     ffi::c_void,
     path::{Path, PathBuf},
@@ -86,8 +88,8 @@ const FIELD_TOPS: [i32; 2] = [103, 183];
 const FIELD_HEIGHT: i32 = 44;
 const EDIT_HEIGHT: i32 = 24;
 const BROWSE_HEIGHT: i32 = 34;
-const IDLE_WINDOW_HEIGHT: i32 = 440;
-const STATUS_WINDOW_HEIGHT: i32 = 540;
+const IDLE_WINDOW_HEIGHT: i32 = 515;
+const STATUS_WINDOW_HEIGHT: i32 = 615;
 const ZIP_HELP: &str = "В Notion выберите экспорт Markdown & CSV.\nВключите Include subpages и Create folders for subpages.\nСкачайте ZIP-архив, затем укажите его в этом поле.\nИсходный архив не изменяется. Результат создаётся в новой папке.";
 #[repr(C)]
 struct Msg {
@@ -567,13 +569,14 @@ struct App {
     titlefont: H,
     bg_brush: H,
     field_brush: H,
-    button_procs: [isize; 5],
+    button_procs: [isize; 6],
     hover_button: Option<u32>,
     tooltip: H,
     help_text: Vec<u16>,
     status_visible: bool,
     skip_missing: bool,
     write_report: bool,
+    options: ConversionOptions,
     open_ready: bool,
     rx: Option<Receiver<Event>>,
     stop: Arc<AtomicBool>,
@@ -616,6 +619,9 @@ impl App {
             ("BUTTON", "Открыть папку", 0x10000, 109),
             ("BUTTON", "Пропускать отсутствующие страницы", 0x10000, 110),
             ("BUTTON", "Справка по ZIP", 0x10000, 112),
+            ("STATIC", "Профиль экспорта", 0, 0),
+            ("COMBOBOX", "", 0x10000 | 0x00200000 | 0x3, 118),
+            ("BUTTON", "Настроить…", 0x10000, 119),
         ];
         for (class, text, style, id) in defs {
             let style = if class == "BUTTON" { (style & !0x0f) | 0xB } else { style };
@@ -630,6 +636,11 @@ impl App {
                 else { self.font as usize }, 1);
             self.controls.push(h);
         }
+        for label in ["Универсальный", "База знаний", "Пользовательский"] {
+            SendMessageW(self.controls[18], 0x0143, 0, wide(label).as_ptr() as isize);
+        }
+        SendMessageW(self.controls[18], 0x014E, 1, 0);
+        SetWindowTheme(self.controls[18], wide("DarkMode_Explorer").as_ptr(), null());
         let default = std::env::var_os("USERPROFILE")
             .map(PathBuf::from).unwrap_or(PathBuf::from("."))
             .join("Documents").join("Notion_Obsidian");
@@ -673,7 +684,7 @@ impl App {
             SendMessageW(self.tooltip, 0x0418, 0, (360.0 * self.scale) as isize); // TTM_SETMAXTIPWIDTH
         }
         // Hover feedback and a pointing-hand cursor for action and help buttons.
-        for (slot, index) in [4usize, 7, 10, 14, 16].iter().enumerate() {
+        for (slot, index) in [4usize, 7, 10, 14, 16, 19].iter().enumerate() {
             self.button_procs[slot] =
                 SetWindowLongPtrW(self.controls[*index], -4, button_proc as isize);
         }
@@ -714,13 +725,16 @@ impl App {
             (browse_x, centered_y(output_top, browse_h), browse_w, browse_h), // Output chooser
             (0, 0, 0, 0),                         // unused
             (0, 0, 0, 0),                         // removed inspect action
-            (m, v(317), roww, v(49)),             // Full-width primary action
-            (m, v(273), roww, v(32)),             // Optional report checkbox
-            (m + v(23), v(402), status_w - v(23), v(23)), // Status
-            (m + v(23), v(427), status_w - v(23), v(22)), // Details
-            (w - m - v(173), v(402), v(173), v(38)), // Open folder
-            (m, v(239), roww, v(32)),             // Skip missing checkbox
-            (m + v(155), v(74), v(22), v(22)),   // ZIP help tooltip trigger
+            (m, v(385), roww, v(49)),              // Full-width primary action
+            (m, v(339), roww, v(32)),              // Optional report checkbox
+            (m + v(23), v(478), status_w - v(23), v(23)), // Status
+            (m + v(23), v(503), status_w - v(23), v(22)), // Details
+            (w - m - v(173), v(478), v(173), v(38)), // Open folder
+            (m, v(305), roww, v(32)),              // Skip missing checkbox
+            (m + v(155), v(74), v(22), v(22)),     // ZIP help tooltip trigger
+            (m, v(236), roww, v(22)),              // Profile label
+            (m, v(261), roww - v(155), v(215)),   // Native profile dropdown
+            (w - m - v(141), v(261), v(141), v(32)), // Configure profile
         ];
         for (i, (x, y, width, height)) in rows.iter().enumerate() {
             if *width > 0 {
