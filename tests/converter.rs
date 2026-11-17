@@ -982,3 +982,91 @@ fn local_markdown_block_uuid_fallback_keeps_offline_page_target() {
     assert!(root.contains("[[Child|Child block]]"));
     assert_eq!(r.audit["passed"], true);
 }
+
+
+#[test]
+fn export_presets_preserve_knowledge_compatibility_and_universal_layout() {
+    use notion_to_obsidian::options::ConversionOptions;
+    let t = root();
+    let archive = archive(t.path(), vec![
+        s(format!("Root {A}.md"), format!("# Root\n\n[DB](Root/DB%20{D}.csv)")),
+        s(format!("Root/DB {D}.csv"), "Name,Answer\nRow,Full text\n"),
+        s(format!("Root/DB {D}_all.csv"), "Name,Answer\nRow,Full text\n"),
+        s(format!("Root/DB/Row {B}.md"), "# Row\n\nAnswer: Full text"),
+    ]);
+    let knowledge = t.path().join("knowledge");
+    let old = Converter::new(|_| {}, Arc::new(AtomicBool::new(false)))
+        .write_report(false).run(&archive, &knowledge).unwrap();
+    let preset = t.path().join("knowledge_profile");
+    let compat = Converter::new(|_| {}, Arc::new(AtomicBool::new(false)))
+        .write_report(false).options(ConversionOptions::knowledge()).run(&archive, &preset).unwrap();
+    assert_eq!(old.mapping, compat.mapping);
+    assert_eq!(old.stats, compat.stats);
+    assert!(knowledge.join("Базы данных").exists());
+    assert!(knowledge.join("Начать здесь.md").exists());
+    assert!(knowledge.join(".obsidian/plugins/notion-table-copy/main.js").exists());
+    assert!(knowledge.join(".obsidian/snippets/notion-full-tables.css").exists());
+
+    let universal = t.path().join("universal");
+    let report = Converter::new(|_| {}, Arc::new(AtomicBool::new(false)))
+        .write_report(false).options(ConversionOptions::universal())
+        .run(&archive, &universal).unwrap();
+    assert_eq!(report.audit["passed"], true);
+    assert!(!universal.join("Базы данных").exists());
+    assert!(universal.join("Root/DB/DB.md").exists());
+    assert!(universal.join("Root/DB/DB.base").exists());
+    assert!(!universal.join("Начать здесь.md").exists());
+    assert!(!universal.join(".obsidian/plugins/notion-table-copy/main.js").exists());
+    assert!(!universal.join(".obsidian/snippets/notion-full-tables.css").exists());
+}
+
+#[test]
+fn export_custom_table_format_and_root_folder_are_configurable() {
+    use notion_to_obsidian::options::{ConversionOptions, Profile, DatabaseLocation, TableOutput, ParentPage};
+    let t = root();
+    let archive = archive(t.path(), vec![
+        s(format!("Root {A}.md"), "# Root"),
+        s(format!("Root/Tasks {D}.csv"), "Title,Text\nFirst,Body\n"),
+        s(format!("Root/Tasks {D}_all.csv"), "Title,Text\nFirst,Body\n"),
+    ]);
+    let mut options = ConversionOptions::custom_from(Profile::Universal);
+    options.databases.location = DatabaseLocation::SeparateRoot;
+    options.databases.folder_name = Some("Таблицы".into());
+    options.databases.output = TableOutput::MarkdownOnly;
+    options.structure.parent_page = ParentPage::Sibling;
+    let out = t.path().join("markdown_only");
+    let report = Converter::new(|_| {}, Arc::new(AtomicBool::new(false)))
+        .options(options.clone()).run(&archive, &out).unwrap();
+    assert_eq!(report.audit["passed"], true);
+    assert!(out.join("Таблицы/Root/Tasks/Tasks.md").exists());
+    assert!(!out.join("Таблицы/Root/Tasks/Tasks.base").exists());
+    let table = fs::read_to_string(out.join("Таблицы/Root/Tasks/Tasks.md")).unwrap();
+    assert!(table.contains("| Title | Text |"));
+
+    options.databases.output = TableOutput::BasesOnly;
+    let out = t.path().join("bases_only");
+    let report = Converter::new(|_| {}, Arc::new(AtomicBool::new(false)))
+        .options(options).run(&archive, &out).unwrap();
+    assert_eq!(report.audit["passed"], true);
+    assert!(out.join("Таблицы/Root/Tasks/Tasks.base").exists());
+    let landing = fs::read_to_string(out.join("Таблицы/Root/Tasks/Tasks.md")).unwrap();
+    assert!(!landing.contains("^notion-table"));
+}
+
+#[test]
+fn structure_preview_resolves_paths_without_creating_vault() {
+    use notion_to_obsidian::options::ConversionOptions;
+    let t = root();
+    let archive = archive(t.path(), vec![
+        s(format!("Root {A}.md"), "# Root"),
+        s(format!("Root/DB {D}.csv"), "Name,Answer\nOne,Two\n"),
+    ]);
+    let before = std::fs::read_dir(t.path()).unwrap().count();
+    let preview = Converter::new(|_| {}, Arc::new(AtomicBool::new(false)))
+        .options(ConversionOptions::universal()).preview(&archive).unwrap();
+    assert_eq!(preview.databases, 1);
+    assert_eq!(preview.records, 1);
+    assert!(preview.paths.iter().any(|p| p.ends_with("DB.base")));
+    assert_eq!(before, std::fs::read_dir(t.path()).unwrap().count());
+    assert!(!t.path().join("out").exists());
+}
