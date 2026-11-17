@@ -611,7 +611,7 @@ impl Converter {
             write_report: true, // Preserve existing CLI/library behavior.
             options: ConversionOptions::knowledge(),
             report: Report {
-                version: "0.5.14".into(),
+                version: "0.6.0".into(),
                 ..Default::default()
             },
             cancel,
