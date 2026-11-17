@@ -1107,6 +1107,8 @@ unsafe extern "system" fn button_proc(hwnd: H, msg: u32, w: usize, l: isize) -> 
         else if hwnd == app.controls[10] { (2, 106) }
         else if hwnd == app.controls[14] { (3, 109) }
         else if hwnd == app.controls[16] { (4, 112) }
+        else if hwnd == app.controls[19] { (5, 119) }
+        else if hwnd == app.controls[20] { (6, 120) }
         else { return DefWindowProcW(hwnd, msg, w, l); };
     match msg {
         0x0200 if IsWindowEnabled(hwnd) != 0 => { // WM_MOUSEMOVE
