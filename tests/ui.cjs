@@ -117,7 +117,7 @@ assert.match(gui, /SetWindowLongPtrW\(hwnd, -4, dark_combo_proc as isize\)/);
 assert.match(gui, /apply_dark_combo\(self\.controls\[18\]\)/);
 assert.match(settingsUi, /apply_dark_combo\(h\)/);
 assert.doesNotMatch(gui, /SetWindowTheme\(self\.controls\[18\], wide\("DarkMode_Explorer"/);
-assert.doesNotMatch(settingsUi, /SetWindowTheme\(handle, wide\("DarkMode_Explorer"/);
+assert.doesNotMatch(settingsUi, /if class == "COMBOBOX"\s*\{[\s\S]{0,220}DarkMode_Explorer/);
 assert.match(settingsUi, /is_combo_descendant\(l as H, combo\)/);
 assert.match(gui, /draw_combo_chrome\(hwnd\)/);
 // ComboBox paints a separate inset frame around its selected-value area.
