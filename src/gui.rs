@@ -1289,7 +1289,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
             }
             0
         }
-        0x133 | 0x138 => { // WM_CTLCOLOREDIT / WM_CTLCOLORSTATIC
+        0x133 | 0x134 | 0x138 => { // WM_CTLCOLOREDIT / WM_CTLCOLORLISTBOX / WM_CTLCOLORSTATIC
             let dc = w as H;
             let index = app.controls.iter().position(|&h| h == l as H);
             let edit = index == Some(3) || index == Some(6);
@@ -1305,7 +1305,8 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
                     draw_button(item, app);
                     return 1;
                 }
-                if item.control_type == 2 && item.control_id == 118 {
+                // ODT_COMBOBOX is 3; 2 is ODT_LISTBOX.
+                if item.control_type == 3 && item.control_id == 118 {
                     draw_combo_item(item, app.font, app.scale);
                     return 1;
                 }
@@ -1315,7 +1316,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
         0x2c => { // WM_MEASUREITEM
             if l != 0 {
                 let measure = &mut *(l as *mut MeasureItem);
-                if measure.control_type == 2 && measure.control_id == 118 {
+                if measure.control_type == 3 && measure.control_id == 118 {
                     measure.item_height = (28.0 * app.scale).round() as u32;
                     return 1;
                 }
