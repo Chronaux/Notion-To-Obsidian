@@ -70,19 +70,18 @@ jobs:
           asset=dist/NotionToObsidian_Windows_x64.zip
           test -s "$asset"
           test -s dist/SHA256SUMS.txt
-          if gh release view "$tag" >/dev/null 2>&1; then
-            existing_sha=$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')
-            is_draft=$(gh release view "$tag" --json isDraft --jq '.isDraft')
+          # Drafts do not resolve through /releases/tags/{tag}; use the list API.
+          existing_id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$tag\") | .id" | head -n 1)
+          if [[ -n "$existing_id" ]]; then
+            is_draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/$existing_id" --jq '.draft')
             if [[ "$is_draft" != "true" ]]; then
-              echo "::error::Version $tag has already been published. Bump the release version."
+              echo "::error::Version $tag was already published; bump the version."
               exit 1
             fi
-            if [[ "$existing_sha" == "$GITHUB_SHA" ]]; then
-              gh release upload "$tag" "$asset" dist/SHA256SUMS.txt --clobber
-              exit 0
-            fi
-            # Only discard an unpublished draft from an earlier failed run.
-            gh release delete "$tag" --yes
+            # A failed run may have left an unpublished draft from an older SHA.
+            # Remove only the draft with this exact version, never a published release.
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$existing_id"
           fi
           gh release create "$tag" "$asset" dist/SHA256SUMS.txt \
             --title "Notion → Obsidian $tag (Windows x64)" \
@@ -100,18 +99,29 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Download draft release assets
+      - name: Download draft release assets by ID
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = "application/vnd.github+json"
+            "X-GitHub-Api-Version" = "2022-11-28"
+            "User-Agent" = "notion-to-obsidian-smoke-test"
+          }
+          $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases?per_page=100" -Headers $headers
+          $release = $releases | Where-Object { $_.tag_name -eq "v$version" -and $_.draft -eq $true } | Select-Object -First 1
+          if (!$release) { throw "Draft release v$version not found in authenticated release listing" }
           New-Item -ItemType Directory -Path staged -Force | Out-Null
-          gh release download "v$version" --pattern "NotionToObsidian_Windows_x64.zip" --dir staged
-          if ($LASTEXITCODE -ne 0) { throw "Could not download the draft release ZIP" }
-          gh release download "v$version" --pattern "SHA256SUMS.txt" --dir staged
-          if ($LASTEXITCODE -ne 0) { throw "Could not download draft release checksums" }
+          $headers.Accept = "application/octet-stream"
+          foreach ($name in @("NotionToObsidian_Windows_x64.zip", "SHA256SUMS.txt")) {
+            $asset = $release.assets | Where-Object { $_.name -eq $name } | Select-Object -First 1
+            if (!$asset) { throw "Missing draft release asset: $name" }
+            Invoke-WebRequest -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$($asset.id)" -Headers $headers -OutFile "staged/$name"
+          }
           $expected = ((Get-Content staged/SHA256SUMS.txt) -split '\s+')[0]
           $actual = (Get-FileHash staged/NotionToObsidian_Windows_x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $expected) { throw "Staged release ZIP checksum mismatch" }
@@ -171,10 +181,12 @@ jobs:
           set -euo pipefail
           version=$(python3 -c 'import tomllib;print(tomllib.load(open("Cargo.toml","rb"))["package"]["version"])')
           tag="v$version"
-          is_draft=$(gh release view "$tag" --json isDraft --jq '.isDraft')
-          if [[ "$is_draft" != "true" ]]; then
-            echo "::error::Expected draft release $tag, refusing to publish"
+          draft_id=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq ".[] | select(.tag_name == \"$tag\" and .draft == true) | .id" | head -n 1)
+          if [[ -z "$draft_id" ]]; then
+            echo "::error::Unpublished draft for $tag not found"
             exit 1
           fi
-          gh release edit "$tag" --draft=false --latest
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$draft_id" \
+            -F draft=false -f make_latest=true --jq '.html_url'
           echo "Ready-to-run download: https://github.com/$GITHUB_REPOSITORY/releases/latest/download/NotionToObsidian_Windows_x64.zip"

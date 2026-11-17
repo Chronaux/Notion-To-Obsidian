@@ -54,9 +54,9 @@ assert.match(gui, /v\(105\), input_w - v\(4\), v\(40\)/);
 // The tested ZIP is staged as a draft release, bypassing Actions artifact quota.
 assert.match(workflow, /gh release create/);
 assert.match(workflow, /--draft/);
-assert.match(workflow, /gh release download/);
+assert.match(workflow, /releases\/assets/);
 assert.match(workflow, /Expand-Archive/);
-assert.match(workflow, /gh release edit/);
+assert.match(workflow, /--method PATCH/);
 assert.doesNotMatch(workflow, /actions\/(?:upload|download)-artifact@/);
 assert.match(packaging, /Leave WORK intact/);
 assert.match(packaging, /Nested archive detected/);
