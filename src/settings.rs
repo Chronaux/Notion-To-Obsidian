@@ -48,7 +48,7 @@ impl Editor {
         self.add("BUTTON", text, 0x00010000 | 0x3, id, x, y, 335, 27);
     }
     unsafe fn edit(&mut self, id: isize, x: i32, y: i32) {
-        self.add("EDIT", "", 0x00010000 | 0x00000080 | 0x00000004 | 0x00800000, id, x, y, 330, 29);
+        self.add("EDIT", "", 0x00010000 | 0x00000080 | 0x00800000, id, x, y, 330, 29);
     }
     unsafe fn button(&mut self, id: isize, text: &str, x: i32, y: i32, w: i32) {
         self.add("BUTTON", text, 0x00010000, id, x, y, w, 33);
