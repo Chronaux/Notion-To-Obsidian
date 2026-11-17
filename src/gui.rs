@@ -459,6 +459,17 @@ unsafe fn theme_combo_children(hwnd: H) {
     }
 }
 
+unsafe fn is_combo_descendant(hwnd: H, combo: H) -> bool {
+    let mut parent = GetParent(hwnd);
+    while parent != 0 {
+        if parent == combo {
+            return true;
+        }
+        parent = GetParent(parent);
+    }
+    false
+}
+
 // The system theme can still paint a light arrow/frame even for an owner-drawn
 // combo. Paint that small chrome area after the native control has painted its
 // text; the popup rows themselves are handled by draw_combo_item.
@@ -1381,7 +1392,7 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
             let index = app.controls.iter().position(|&h| h == l as H);
             let list = msg == 0x134;
             let combo_part = l != 0 && app.controls.get(18)
-                .is_some_and(|&combo| GetParent(l as H) == combo);
+                .is_some_and(|&combo| is_combo_descendant(l as H, combo));
             let edit = index == Some(3) || index == Some(6) || combo_part;
             SetBkColor(dc, if edit || list { FIELD } else { BG });
             SetBkMode(dc, if edit { 2 } else { 1 });
