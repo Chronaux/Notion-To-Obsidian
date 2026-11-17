@@ -237,6 +237,8 @@ extern "system" {
     fn SetWindowLongPtrW(hwnd: H, index: i32, value: isize) -> isize;
     fn CallWindowProcW(proc: isize, hwnd: H, msg: u32, w: usize, l: isize) -> isize;
     fn GetParent(hwnd: H) -> H;
+    fn EnumChildWindows(hwnd: H, callback: Option<unsafe extern "system" fn(H, isize) -> i32>, param: isize) -> i32;
+    fn GetClassNameW(hwnd: H, class_name: *mut u16, max: i32) -> i32;
     fn TrackMouseEvent(event: *mut TrackMouse) -> i32;
     fn SetCursor(cursor: H) -> H;
     fn SetFocus(hwnd: H) -> H;
@@ -413,6 +415,59 @@ unsafe fn draw_combo_item(item: &DrawItem, font: H, scale: f32) {
             SelectObject(item.dc, old_font);
         }
     }
+}
+
+// CBS_DROPDOWNLIST creates an internal EDIT/STATIC child for the selected
+// value. The parent ComboBox theme does not theme that child, so its default
+// WS_BORDER/WS_EX_CLIENTEDGE produces the remaining white outline. Theme the
+// child itself and remove its redundant frame; the ComboBox owns the one dark
+// outer frame painted by dark_combo_proc.
+unsafe extern "system" fn theme_combo_child(hwnd: H, _param: isize) -> i32 {
+    let mut class_name = [0u16; 32];
+    let length = GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32);
+    if length <= 0 {
+        return 1;
+    }
+    let class_name = String::from_utf16_lossy(&class_name[..length as usize]);
+    if class_name.eq_ignore_ascii_case("EDIT") || class_name.eq_ignore_ascii_case("STATIC") {
+        SetWindowTheme(hwnd, wide("DarkMode_Explorer").as_ptr(), null());
+        let style = GetWindowLongPtrW(hwnd, -16); // GWL_STYLE
+        let ex_style = GetWindowLongPtrW(hwnd, -20); // GWL_EXSTYLE
+        let dark_style = style & !0x00800000; // WS_BORDER
+        let dark_ex_style = ex_style & !0x00000200; // WS_EX_CLIENTEDGE
+        let mut frame_changed = false;
+        if dark_style != style {
+            SetWindowLongPtrW(hwnd, -16, dark_style);
+            frame_changed = true;
+        }
+        if dark_ex_style != ex_style {
+            SetWindowLongPtrW(hwnd, -20, dark_ex_style);
+            frame_changed = true;
+        }
+        if frame_changed {
+            // SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
+            SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x37);
+        }
+        InvalidateRect(hwnd, null(), 1);
+    }
+    1
+}
+
+unsafe fn theme_combo_children(hwnd: H) {
+    if hwnd != 0 {
+        EnumChildWindows(hwnd, Some(theme_combo_child), 0);
+    }
+}
+
+unsafe fn is_combo_descendant(hwnd: H, combo: H) -> bool {
+    let mut parent = GetParent(hwnd);
+    while parent != 0 {
+        if parent == combo {
+            return true;
+        }
+        parent = GetParent(parent);
+    }
+    false
 }
 
 // The system theme can still paint a light arrow/frame even for an owner-drawn
@@ -796,6 +851,7 @@ impl App {
         }
         SendMessageW(self.controls[18], 0x014E, 1, 0);
         SetWindowTheme(self.controls[18], wide("DarkMode_Explorer").as_ptr(), null());
+        theme_combo_children(self.controls[18]);
         let combo_previous = SetWindowLongPtrW(self.controls[18], -4, dark_combo_proc as isize);
         SetWindowLongPtrW(self.controls[18], -21, combo_previous);
         let default = std::env::var_os("USERPROFILE")
@@ -1335,7 +1391,9 @@ unsafe extern "system" fn procedure(hwnd: H, msg: u32, w: usize, l: isize) -> is
             let dc = w as H;
             let index = app.controls.iter().position(|&h| h == l as H);
             let list = msg == 0x134;
-            let edit = index == Some(3) || index == Some(6);
+            let combo_part = l != 0 && app.controls.get(18)
+                .is_some_and(|&combo| is_combo_descendant(l as H, combo));
+            let edit = index == Some(3) || index == Some(6) || combo_part;
             SetBkColor(dc, if edit || list { FIELD } else { BG });
             SetBkMode(dc, if edit { 2 } else { 1 });
             SetTextColor(dc, if edit || list || matches!(index, Some(0 | 2 | 5 | 12)) { TEXT } else { MUTED });

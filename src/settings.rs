@@ -47,6 +47,7 @@ impl Editor {
         for item in items {
             SendMessageW(h, 0x0143, 0, wide(item).as_ptr() as isize); // CB_ADDSTRING
         }
+        theme_combo_children(h);
     }
     unsafe fn check(&mut self, id: isize, text: &str, x: i32, y: i32) {
         // A themed BS_AUTOCHECKBOX ignores WM_CTLCOLORBTN text colours on Win10/11.
@@ -252,7 +253,10 @@ unsafe extern "system" fn settings_proc(hwnd: H, msg: u32, w: usize, l: isize) -
             0
         }
         0x0133 | 0x0135 | 0x0138 | 0x0134 => {
-            let edit = w != 0 && state.controls.iter().any(|&h| h == l as H && (h == state.child(602) || h == state.child(605)));
+            let combo_part = l != 0 && state.controls.iter()
+                .any(|&combo| is_combo_descendant(l as H, combo));
+            let edit = combo_part || (w != 0 && state.controls.iter()
+                .any(|&h| h == l as H && (h == state.child(602) || h == state.child(605))));
             let dc = w as H;
             let list = msg == 0x0134;
             SetBkMode(dc, 1);
