@@ -8,20 +8,21 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-IGNORE = {"THIRD_PARTY_NOTICES.txt"}
+IGNORE = {"THIRD_PARTY_NOTICES.txt", "scripts/privacy_scan.py"}
 SKIP_PREFIX = ("licenses/",)
 SKIP_SUFFIX = (".ico", ".exe", ".zip", ".pdb", ".lock")
 RULES = {
     "credentials": re.compile(r"(?:ghp_|gho_|github_pat_|ntn_|sk-[A-Za-z0-9]{16}|AKIA[A-Z0-9]{16}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)"),
-    "personal_email": re.compile(r"\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b"),
-    "windows_home": re.compile(r"\\b[A-Za-z]:[\\\\/]Users[\\\\/][^\\\\/\\s\\\"']+"),
-    "unix_home": re.compile(r"/(?:Users|home)/[^/\\s\\\"']+"),
-    "workplace": re.compile(r"МЭШ|Московская электронная школа|school\\.itsm\\.mos\\.ru", re.I),
-    "notion_private_link": re.compile(r"https?://(?:www\\.)?(?:notion\\.so|notion\\.site|app\\.notion\\.com)/[^\\s\\\"'<>)]*[a-f0-9]{32}", re.I),
+    "personal_email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+    "windows_home": re.compile(r"\b[A-Za-z]:[/\\]Users[/\\][^/\\\s\"']+"),
+    "unix_home": re.compile(r"/(?:Users|home)/[^/\s\"']+"),
+    "workplace": re.compile(r"МЭШ|Московская электронная школа|school\.itsm\.mos\.ru", re.I),
+    "notion_private_link": re.compile(r"https?://(?:www\.)?(?:notion\.so|notion\.site|app\.notion\.com)/[^\s\"'<>)]*[a-f0-9]{32}", re.I),
 }
+
 def main() -> int:
     try:
-        paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\\0")
+        paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
     except (OSError, subprocess.CalledProcessError):
         print("Run this scanner inside a Git checkout.", file=sys.stderr)
         return 2
@@ -33,10 +34,10 @@ def main() -> int:
         if not file.is_file():
             continue
         try:
-            text = file.read_text(encoding="utf-8")
+            data = file.read_text(encoding="utf-8")
         except (UnicodeError, OSError):
             continue
-        for line_number, line in enumerate(text.splitlines(), 1):
+        for line_number, line in enumerate(data.splitlines(), 1):
             for label, pattern in RULES.items():
                 if pattern.search(line):
                     findings.append((path, line_number, label))
@@ -48,5 +49,6 @@ def main() -> int:
     print("No high-confidence private patterns found in tracked first-party text.")
     print("This is not a history, binary, screenshot or manual content audit.")
     return 0
+
 if __name__ == "__main__":
     sys.exit(main())

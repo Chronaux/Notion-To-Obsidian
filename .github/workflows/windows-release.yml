@@ -47,6 +47,8 @@ jobs:
         with:
           targets: x86_64-pc-windows-gnu
           components: rustfmt
+      - name: Check tracked files for private patterns
+        run: python3 scripts/privacy_scan.py
       - name: Rust tests
         run: cargo test --locked
       - name: Check Windows UI metadata and icon
