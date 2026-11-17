@@ -96,6 +96,17 @@ assert.doesNotMatch(gui, /item\.control_type == 2 && item\.control_id == 118/);
 assert.match(gui, /0x133 \| 0x134 \| 0x138/);
 assert.match(gui, /unsafe extern "system" fn dark_combo_proc/);
 assert.match(gui, /draw_combo_chrome\(hwnd\)/);
+// The themed white frame is non-client chrome; repaint it through a window DC
+// after both WM_PAINT and WM_NCPAINT, including focus/enable state changes.
+assert.match(gui, /fn GetWindowDC\(hwnd: H\) -> H/);
+assert.match(gui, /unsafe fn draw_combo_nonclient_frame\(hwnd: H\)/);
+assert.match(gui, /let dc = GetWindowDC\(hwnd\)/);
+assert.match(gui, /GetWindowRect\(hwnd, &mut window\)/);
+assert.match(gui, /0x0085 => draw_combo_nonclient_frame\(hwnd\)/);
+assert.match(gui, /draw_combo_chrome\(hwnd\);[\\s\\S]{0,180}draw_combo_nonclient_frame\(hwnd\);/);
+assert.match(gui, /0x0007 \\| 0x0008 \\| 0x000A \\| 0x0086/);
+const comboChrome = gui.slice(gui.indexOf('unsafe fn draw_combo_chrome'), gui.indexOf('// ComboBox\'s themed outer border'));
+assert.doesNotMatch(comboChrome, /MoveToEx\\(dc, 0, 0/);
 assert.match(gui, /GetDpiForWindow/);
 assert.match(gui, /0x2c => \{ \/\/ WM_MEASUREITEM/);
 assert.match(settingsUi, /0x00010000 \| 0xB/);
