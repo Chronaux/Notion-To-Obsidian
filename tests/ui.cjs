@@ -102,7 +102,8 @@ assert.match(gui, /fn GetClassNameW\(hwnd: H, class_name: \*mut u16, max: i32\) 
 assert.match(gui, /unsafe extern "system" fn theme_combo_child/);
 assert.match(gui, /eq_ignore_ascii_case\("EDIT"\) \|\| class_name\.eq_ignore_ascii_case\("STATIC"\)/);
 assert.match(gui, /style & !0x00800000/);
-assert.match(gui, /ex_style & !0x00000200/);
+assert.match(gui, /SetWindowTheme\(hwnd, wide\(""\)\.as_ptr\(\), wide\(""\)\.as_ptr\(\)\)/);
+assert.match(gui, /ex_style & !\(0x00000200 \| 0x00020000\)/);
 assert.match(gui, /SetWindowPos\(hwnd, 0, 0, 0, 0, 0, 0x37\)/);
 assert.match(gui, /EnumChildWindows\(hwnd, Some\(theme_combo_child\), 0\)/);
 assert.match(gui, /unsafe fn is_combo_descendant\(hwnd: H, combo: H\) -> bool/);
